@@ -13,7 +13,7 @@ from pennylane import Identity, PauliX, PauliY, PauliZ
 from qiskit.opflow.primitive_ops.pauli_sum_op import PauliSumOp
 from qiskit_nature.operators.second_quantization import SpinOp
 
-from ..exceptions import QHamConverterError
+from .exceptions import QHamConverterError
 
 logger = logging.getLogger(__name__)
 

@@ -13,7 +13,7 @@ poetry install
 poetry add <dependency>
 ```
 
-optionally add the `-D` flag if the dependency is a development dependency (e.g. linting or documentation tools.)
+optionally add the `-D` flag if the dependency is a development dependency (e.g. testing, linting or documentation tools.)
 
 ## QHamConverter
 
