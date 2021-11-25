@@ -12,6 +12,12 @@ openfermion = "^1.2.0"
 PennyLane = "^0.19.1"
 
 [tool.poetry.dev-dependencies]
+black = "^21.11b1"
+isort = "^5.10.1"
+pydocstyle = "^6.1.1"
+mypy = "^0.910"
+flake8 = "^4.0.1"
+jupyter = "^1.0.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
