@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "QuantumTools"
+version = "0.0.1"
+description = "Random useful tools for chemistry related quatum computing."
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+qiskit = "^0.32.1"
+openfermion = "^1.2.0"
+PennyLane = "^0.19.1"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
