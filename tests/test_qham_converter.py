@@ -29,13 +29,13 @@ pennylane_hamiltonian = qml.Hamiltonian(
 
 
 def test_qiskit() -> None:
-    converted_ham = HamiltonianConverter(hamiltonian).convert("qiskit")
+    converted_ham = QHamConverter(hamiltonian).convert("qiskit")
     assert type(converted_ham) is PauliSumOp
     assert np.all(converted_ham.to_matrix() - qiskit_hamiltonian.to_matrix() == 0)
 
 
 def test_pennylane() -> None:
-    converted_ham = HamiltonianConverter(hamiltonian).convert("pennylane")
+    converted_ham = QHamConverter(hamiltonian).convert("pennylane")
     assert type(converted_ham) is qml.Hamiltonian
     assert pennylane_hamiltonian.compare(pennylane_hamiltonian)
 
