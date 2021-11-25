@@ -10,6 +10,7 @@ python = "^3.8"
 qiskit = "^0.32.1"
 openfermion = "^1.2.0"
 PennyLane = "^0.19.1"
+qiskit-nature = "^0.2.2"
 
 [tool.poetry.dev-dependencies]
 black = "^21.11b1"

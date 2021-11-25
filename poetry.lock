@@ -1530,6 +1530,25 @@ jit = ["numba"]
 visualization = ["matplotlib (>=2.1)"]
 
 [[package]]
+name = "qiskit-nature"
+version = "0.2.2"
+description = "Qiskit Nature: A library of quantum computing chemistry/physics experiments"
+category = "main"
+optional = false
+python-versions = ">=3.6"
+
+[package.dependencies]
+h5py = "<3.3"
+numpy = ">=1.17"
+psutil = ">=5"
+qiskit-terra = ">=0.18.0"
+scikit-learn = ">=0.20.0"
+scipy = ">=1.4"
+
+[package.extras]
+pyscf = ["pyscf"]
+
+[[package]]
 name = "qiskit-terra"
 version = "0.18.3"
 description = "Software for developing quantum computing programs"
@@ -1965,7 +1984,7 @@ testing = ["pytest (>=4.6)", "pytest-checkdocs (>=2.4)", "pytest-flake8", "pytes
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "5e0b60e40af19c2947cbd02b4f8d8eed397df2e1eadec6289962b9557f402eae"
+content-hash = "c7b648298a18b7977bf60f0c7492040a97b85b49ccf06e247970790adabb617f"
 
 [metadata.files]
 appdirs = [
@@ -3068,6 +3087,10 @@ qiskit-ibmq-provider = [
 qiskit-ignis = [
     {file = "qiskit-ignis-0.6.0.tar.gz", hash = "sha256:b41bbbc90a042f89d1a5bb01100d59d72facdfe18cb9fc336af74f0e94aae7fc"},
     {file = "qiskit_ignis-0.6.0-py3-none-any.whl", hash = "sha256:8f8a2c0bbecb0c5868730db8945862e73d86b57b10fb9f41884c32568429c0a5"},
+]
+qiskit-nature = [
+    {file = "qiskit-nature-0.2.2.tar.gz", hash = "sha256:ce3558d4acf2511111cc398361146af36391d67e5a9fe9c4bd0f727cb56022bf"},
+    {file = "qiskit_nature-0.2.2-py3-none-any.whl", hash = "sha256:d99b4beedc9f86d19cef0405c16d63395ae97c6ff0d128f0fe0dadeeb174988f"},
 ]
 qiskit-terra = [
     {file = "qiskit-terra-0.18.3.tar.gz", hash = "sha256:8737c8f1f4c6f29ec2fb02d73023f4854a396c33f78f4629a861a3e48fc789cc"},

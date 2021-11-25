@@ -17,7 +17,6 @@ from .exceptions import QHamConverterError
 
 logger = logging.getLogger(__name__)
 
-
 class QHamConverter:
     """Class to create and output qubit hamiltonians."""
 
@@ -43,7 +42,7 @@ class QHamConverter:
             self.n_qubits = len(next(iter(input_hamiltonian.keys())))
             self._intermediate = input_hamiltonian
         elif type(input_hamiltonian) in [Path, str]:
-            self._intermediate = self._read_file(input_hamiltonian)
+            self._read_file(input_hamiltonian)
         else:
             raise TypeError(
                 "Input Hamiltonian must be an openfermion.QubitOperator or path."
@@ -63,7 +62,7 @@ class QHamConverter:
             )
         return output
 
-    def save(self, filepath: Path) -> None:
+    def save(self, filepath: str) -> None:
         """Save the intermediate representation to file.
 
         Dump the IR using JSON so that it can be picked up again later.
@@ -107,9 +106,9 @@ class QHamConverter:
             error_string += "All operator weights must be ints or floats.\n"
 
         if error_string:
-            raise HamiltonianConverterError(error_string)
+            raise QHamConverterError(error_string)
 
-        return intermediate
+        self._intermediate = intermediate
 
     def _of_to_int(self) -> Dict[str, float]:
         """Construct intermediate representation of qubit hamiltonian from openfermion representation.
