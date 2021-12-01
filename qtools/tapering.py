@@ -352,8 +352,18 @@ def Clifford_operator_reduction_to_X(list_symmetry_generators) -> Tuple[list, li
     return single_qubit_generators, rotations
 
 
-def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> QubitOperator:
+def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Tuple[QubitOperator, list, list, list]:
+    """
+    Function maps list of symmetry operators to single qubit Pauli X operators using Clifford rotations
 
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator to perform tapering on
+    Returns:
+        H_rotated (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        symmetry_generators (list): list of symmetry operators in pauli_hamiltonian
+        single_X_generators (list): list of symmetry operators that have been rotated to be single Pauli X terms
+        clifford_rotations (list): list of cliford rotations used to reduce all symmetry operators to single Pauli X terms
+    """
     n_qubits = count_qubits(pauli_hamiltonian)
 
     G_mat= build_G_matrix(list(pauli_hamiltonian), n_qubits)
@@ -386,7 +396,18 @@ def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Qub
 
 
 def find_sector_brute_force(rotated_hamiltonian: QubitOperator, symmetry_generators: list) -> List:
+    """
+    Function takes in symmetry rotated Hamiltonian and single qubit X symmetry generators and returns all the
+    tapered Hamiltonians ordered by increasing eigenvalue.
 
+    Note this function performs diagonlisation and returns 2^num_generators Hamiltonians
+
+    Args:
+        rotated_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+    Returns:
+        H_rotated (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        symmetry_generators (list): list of symmetry operators that have been rotated to be single Pauli X terms
+    """
     symmetry_generator_qubit_indices = set()
     for symm_op in symmetry_generators:
         for Pauliword, coeff in symm_op.terms.items():
@@ -441,10 +462,27 @@ def find_sector_brute_force(rotated_hamiltonian: QubitOperator, symmetry_generat
 def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, symmetry_generators_pre_rotatation: list,
                                        qubit_state: np.array, symmetry_generators: list,
                                        check_correct: bool = False) -> QubitOperator:
+    """
+    Function that returns tapered Hamiltonian according to given qubit_state.
 
+    Function gets the eigenvalues of symmetry_generators_pre_rotatation measured on the input qubit state
+    and uses these to define the measurements of the symmetry_generators (rather than brute force searching over
+    all possible measurement assignments to them).
 
+    Note check_correct performs diagonlisation of the full rotated_hamiltonian (contains all qubits of problem)
+    and compares minimum eigenvalue to tapered H (fewer qubits)
+    This can be expensive to check!
 
-
+    Args:
+        rotated_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        symmetry_generators_pre_rotatation (list): List of symmetry generators before clifford rotations
+        qubit_state (np.array): qubit state that defines eigenvalues of symmetry_generators_pre_rotatation
+        symmetry_generators (list): List of single qubit X symmetry generators
+        check_correct (bool): optional flag to compare minimum eigenvalue of rotated_hamiltonian with tapered H
+                              note this should be the same for function to have been succcessful
+    Returns:
+        H_reduced (QubitOperator): ground state tapered Hamiltonian
+    """
     qubit_state_Z_mesaure = -1*((2*qubit_state) - 1) # plus and minus one for Z measurement
     generator_ind_and_meas_val = {}
     for sym_op_ind, symm_op in enumerate(symmetry_generators_pre_rotatation):
@@ -454,7 +492,6 @@ def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, sym
         if not ''.join(sym_paulis) == 'Z' * len(sym_qno):
             raise ValueError(f'Currently function only works for Z generators! {symm_op} not valild')
         generator_ind_and_meas_val[sym_op_ind] = np.prod(np.take(qubit_state_Z_mesaure, sym_qno)) * coeff[0]
-
 
     symmetry_generator_qubit_indices = set()
     for symm_op in symmetry_generators:
