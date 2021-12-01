@@ -546,6 +546,25 @@ def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, sym
     return H_reduced
 
 
+def get_ground_tapered_H_using_HF_state(pauli_hamiltonian: QubitOperator, HF_qubit_state: np.array,
+                                        check_tapering:bool = False):
+    """
+    Function that returns tapered Hamiltonian, where HF ground state is used to define the Sector
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    (H_rotated, symmetry_generators,
+    single_X_generators, clifford_rotations) = get_rotated_operator_and_generators(pauli_hamiltonian)
+
+    H_tapered = find_ground_sector_using_input_state(H_rotated, symmetry_generators, HF_qubit_state,
+                                                     single_X_generators, check_correct=check_tapering)
+
+    return H_tapered
+
+
 if __name__ ==  '__main__':
 
     JW_ket = np.eye(2**4)[int('0101',2)].reshape(16,1)
@@ -615,3 +634,6 @@ if __name__ ==  '__main__':
     print('ground H tapered:')
     print(min(eigvals3))
     print(H_tapered_ground)
+
+    H_tap = get_ground_tapered_H_using_HF_state(reduce(lambda x,y:x+y, H), JW_array, check_tapering=True)
+    print(H_tap == H_tapered_ground)
