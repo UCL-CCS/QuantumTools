@@ -559,19 +559,22 @@ if __name__ ==  '__main__':
     H_new_mat = get_sparse_operator(reduce(lambda x, y: x + y, H_rotated))
 
     from numpy.linalg import eigh
-    eigvecs, eigvals = eigh(H_new_mat.todense())
-    eigvecs2, eigvals2 = eigh(H_old_mat.todense())
+    eigvals, eigvecs = eigh(H_new_mat.todense())
+    eigvals2, eigvecs2 = eigh(H_old_mat.todense())
 
-    print(eigvecs)
-    print(eigvecs2)
+    print(np.allclose(eigvals, eigvals2))
+    print(min(eigvals2))
+
+
+    all_tapered_H = find_sector_brute_force(H_rotated, generators)
+    print(all_tapered_H)
 
     H_tapered_ground = find_ground_sector_using_input_state(H_rotated, symmetry_generators,
                                                             JW_array, generators,check_correct = True)
 
     H_tapered_ground_mat = get_sparse_operator(reduce(lambda x,y:x+y, H_tapered_ground))
-    eigvecs, eigvals = eigh(H_tapered_ground_mat.todense())
-    print(eigvals)
-
-
-    all_tapered_H = find_sector_brute_force(H_rotated, generators)
-    print(all_tapered_H)
+    eigvals3, eigvecs3 = eigh(H_tapered_ground_mat.todense())
+    print()
+    print('ground H tapered:')
+    print(min(eigvals3))
+    print(H_tapered_ground)
