@@ -7,8 +7,10 @@ import random
 from openfermion.linalg import get_sparse_operator
 from openfermion.utils import count_qubits
 from functools import reduce
-from typing import Tuple
+from typing import Tuple, List
 import itertools
+from scipy.sparse.linalg import eigsh
+
 
 def pauliword_to_symplectic(n_qubits: int, QubitOp: QubitOperator) -> np.array:
     """
@@ -110,7 +112,7 @@ def build_E_matrix(G_matrix: np.array) -> np.array:
     Returns:
         E_matrix (np.array): E matrix
     """
-    n_qubits = G_matrix.shape[1]//2
+    n_qubits = G_matrix.shape[0]//2
     Gx = G_matrix[:n_qubits, :]
     Gz = G_matrix[n_qubits:, :]
 
@@ -164,6 +166,40 @@ def gf2elim(M: np.array) -> np.array:
     return M
 
 
+def gf2elim(M):
+
+    m,n = M.shape
+
+    i=0
+    j=0
+
+    while i < m and j < n:
+        # find value and index of largest element in remainder of column j
+        k = np.argmax(M[i:, j]) +i
+
+        # swap rows
+        #M[[k, i]] = M[[i, k]] this doesn't work with numba
+        temp = np.copy(M[k])
+        M[k] = M[i]
+        M[i] = temp
+
+
+        aijn = M[i, j:]
+
+        col = np.copy(M[:, j]) #make a copy otherwise M will be directly affected
+
+        col[i] = 0 #avoid xoring pivot row with itself
+
+        flip = np.outer(col, aijn)
+
+        M[:, j:] = M[:, j:] ^ flip
+
+        i += 1
+        j +=1
+
+    return M
+
+
 def get_kernel(mat: np.array) -> np.array:
     """
     Function to get the kernal of a matrix (uses scipy)
@@ -201,7 +237,7 @@ def find_span_of_vectors(matrix_of_vectors) -> Tuple[np.array, np.array]:
     return linearly_ind_vecs_array, pivots_array
 
 
-def apply_pi4_rotation(rot_pauilword_A, Pauliword_B):
+def apply_pi4_rotation(rot_pauilword_A: QubitOperator, Pauliword_B: QubitOperator) -> QubitOperator:
     """
     apply: R Pb R^dagger
 
@@ -219,6 +255,12 @@ def apply_pi4_rotation(rot_pauilword_A, Pauliword_B):
                     = -2j d k BA
                     # as d^{2} - k^{2} = 0 FOR CASE WHEN PI/4 is used!
 
+    Args:
+        rot_pauilword_A (QubitOperator): qubit operator to rotate with
+        Pauliword_B (QubitOperator): qubit operator rotate
+    Returns:
+        The conjugate rotated Pauliword_B operator
+
     """
     BA = Pauliword_B * rot_pauilword_A
     if rot_pauilword_A*Pauliword_B == BA:
@@ -229,71 +271,83 @@ def apply_pi4_rotation(rot_pauilword_A, Pauliword_B):
         return -2j * d * k * BA
 
 
-def Clifford_operator_reduction_to_X(list_symmetry_generators):
+def Clifford_operator_reduction_to_X(list_symmetry_generators) -> Tuple[list, list]:
+    """
+    Function maps list of symmetry operators to single qubit Pauli X operators using Clifford rotations
 
+    Args:
+        list_symmetry_generators (list): list of INDEPENDENT symmetry operators (QubitOperator)
+    Returns:
+        single_qubit_generators (list): list of symmetry operators that have been mapped to single Pauli X terms
+        rotations (list): list of cliford rotations used to reduce all symmetry operators to single Pauli X terms
+    """
     single_qubit_generators = []
     rotations = []
+    list_symmetry_generators = deepcopy(list_symmetry_generators)
 
     seen_qubits = set()
-    for sym_ind in range(len(list_symmetry_generators)):
-        symmetry_generator = list_symmetry_generators[sym_ind]
+    while list_symmetry_generators:
+        symmetry_generator = list_symmetry_generators.pop(0)
 
-        paulis, coeff = zip(*symmetry_generator.terms.items())
-        qNos, sigmas = zip(*paulis[0])
+        sym_gen_sig_qno, coeff = zip(*symmetry_generator.terms.items())
+        sym_qno, sym_paulis = zip(*sym_gen_sig_qno[0])
 
-        if len(sigmas)==1 and ''.join(sigmas) == 'X':
+        if len(sym_paulis)==1 and ''.join(sym_paulis) == 'X':
             # already single qubit Pauli X!
             single_qubit_generators.append(symmetry_generator)
             continue
         else:
-            if ''.join(sigmas) == 'X'*len(qNos):
+            # symmetry_generator requires mapping to single qubit Pauli X
+            if ''.join(sym_paulis) == 'X'*len(sym_qno):
                 # all X case
-                # select unique X term
-                X_indices = set(q_ind for q_ind, sigma in zip(qNos, sigmas) if sigma == 'X')
+
+                # find unique qubit indices to turn into Pauli Z (note currently all Pauli Xs)
+                X_indices = set(sym_qno)
                 unqiue_inds = list(X_indices.difference(seen_qubits))
-                qNo_selected = unqiue_inds[0]
+                qNo_for_X_to_Z = unqiue_inds[0]
 
-                # map to single  Z term
-                P_rot_diag = QubitOperator(f'Y{qNo_selected}', 1)
+                # map unique qubit X to single  Z term
+                pauli_Y_rot = QubitOperator(f'Y{qNo_for_X_to_Z}', 1)
 
-                # analytical
-                non_diagonal_op = apply_pi4_rotation(P_rot_diag, symmetry_generator)
-                rotations.append(P_rot_diag)
+                # apply rotation to all qubit X operator to generate a single Z operator on qNo_for_X_to_Z
+                op_with_one_Z_or_Y = apply_pi4_rotation(pauli_Y_rot, symmetry_generator)
+                rotations.append(op_with_one_Z_or_Y)
 
                 # apply to generators
-                list_symmetry_generators = [apply_pi4_rotation(P_rot_diag, op) for op in list_symmetry_generators]
+                list_symmetry_generators = [apply_pi4_rotation(pauli_Y_rot, op) for op in list_symmetry_generators]
             else:
-                non_diagonal_op = symmetry_generator
+                op_with_one_Z_or_Y = symmetry_generator
 
-            # map to non_diagonal_op term single qubit X
-            paulis_nondiag, coeff_nondiag = zip(*non_diagonal_op.terms.items())
-            qNos_nondiag, sigmas_nondiag = zip(*paulis_nondiag[0])
+            # map operator containing at least one Z and Y on a single qubit to single Pauli X operator!
+            Z_Y_single_qop_sig_qno, Z_Y_single_coeff = zip(*op_with_one_Z_or_Y.terms.items())
+            Z_Y_single_qNos, Z_Y_single_paulis = zip(*Z_Y_single_qop_sig_qno[0])
 
-            if 'Z' in sigmas_nondiag:
-                Z_indices = set(q_ind for q_ind, sigma in zip(qNos_nondiag, sigmas_nondiag) if sigma == 'Z')
+            if 'Z' in Z_Y_single_paulis:
+                Z_indices = set(q_ind for q_ind, sigma in zip(Z_Y_single_qNos, Z_Y_single_paulis) if sigma == 'Z')
                 unqiue_inds = list(Z_indices.difference(seen_qubits))
-                qNo_nondiag_selected = unqiue_inds[0]
+                qNo_to_map_to_X = unqiue_inds[0]
                 pauli_needed = 'Y'
-            elif 'Y' in sigmas_nondiag:
-                Y_indices = set(q_ind for q_ind, sigma in zip(qNos_nondiag, sigmas_nondiag) if sigma == 'Y')
+            elif 'Y' in Z_Y_single_paulis:
+                Y_indices = set(q_ind for q_ind, sigma in zip(Z_Y_single_qNos, Z_Y_single_paulis) if sigma == 'Y')
                 unqiue_inds = list(Y_indices.difference(seen_qubits))
-                qNo_nondiag_selected = unqiue_inds[0]
+                qNo_to_map_to_X = unqiue_inds[0]
                 pauli_needed = 'Z'
             else:
-                raise ValueError(f'{non_diagonal_op} is not a nondiagonal Pauliword')
+                raise ValueError(f'{op_with_one_Z_or_Y} does not contain single qubit Z or Y')
 
-            P_rot_nondiag = QubitOperator(' '.join([f'{pauli_needed}{qNo_nondiag_selected}' if qNo==qNo_nondiag_selected else f'{s}{qNo}'
-                                 for qNo, s in zip(qNos_nondiag, sigmas_nondiag)]), 1)
+            # build operator to map op_with_one_Z_or_Y to single qubit Z (only differs on
+            P_rot_to_single_X = QubitOperator(' '.join([f'{pauli_needed}{qNo_to_map_to_X}' if qNo==qNo_to_map_to_X else f'{s}{qNo}'
+                                 for qNo, s in zip(Z_Y_single_qNos, Z_Y_single_paulis)]), Z_Y_single_coeff[0])
 
             # analytical
-            reduced_op = apply_pi4_rotation(P_rot_nondiag, non_diagonal_op)
-            rotations.append(P_rot_nondiag)
+            reduced_op = apply_pi4_rotation(P_rot_to_single_X, op_with_one_Z_or_Y)
+            rotations.append(P_rot_to_single_X)
 
             seen_qubits.add(list(*reduced_op.terms.keys())[0][0])
             single_qubit_generators.append(reduced_op)
 
             # apply to generators
-            list_symmetry_generators = [apply_pi4_rotation(P_rot_nondiag, op) for op in list_symmetry_generators]
+            list_symmetry_generators = [apply_pi4_rotation(P_rot_to_single_X, op) for op in list_symmetry_generators]
 
     return single_qubit_generators, rotations
 
@@ -319,29 +373,146 @@ def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Qub
         Pword = symplectic_to_pauliword(stabilizer)
         symmetry_generators.append(Pword)
 
-    generators, clifford_rotations = Clifford_operator_reduction_to_X(symmetry_generators)
+    single_X_generators, clifford_rotations = Clifford_operator_reduction_to_X(symmetry_generators)
 
-    H_tapered = deepcopy(pauli_hamiltonian)
+    H_rotated = deepcopy(pauli_hamiltonian)
     for rot in clifford_rotations[::-1]:
         H_new = QubitOperator()
-        for op in H_tapered:
+        for op in H_rotated:
             H_new += apply_pi4_rotation(rot, op)
-        H_tapered = H_new
+        H_rotated = H_new
 
-    return H_tapered, generators, clifford_rotations
+    return H_rotated, symmetry_generators, single_X_generators, clifford_rotations
 
 
-def find_sector_brute_force(rotated_hamiltonian: QubitOperator, symmetry_generators: list) -> QubitOperator:
+def find_sector_brute_force(rotated_hamiltonian: QubitOperator, symmetry_generators: list) -> List:
 
+    symmetry_generator_qubit_indices = set()
+    for symm_op in symmetry_generators:
+        for Pauliword, coeff in symm_op.terms.items():
+            qNos, _ = zip(*Pauliword)
+            symmetry_generator_qubit_indices.add(*qNos)
+
+    # symmetry_generator_signs = [coeff for term in symmetry_generators for coeff in term.terms.values()]
+
+    # build dictionary to map qubits to new indices
+    n_qubits = count_qubits(rotated_hamiltonian)
+    qubit_inds_kept = set(range(n_qubits)).difference(symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+    all_possible_H: List[QubitOperator] = []
+    # iterate over all possible 2^n_generator +1/-1 measurement assignments
     for measurement_assignment in itertools.product([+1, -1], repeat=len(symmetry_generators)):
-        pass
-    pass
+
+        # generator_ind_and_meas_val = dict(zip(symmetry_generator_qubit_indices,
+        #                                       list(map(lambda x,y: x*y, symmetry_generator_signs,
+        #                                                                 measurement_assignment))))
+        generator_ind_and_meas_val = dict(zip(symmetry_generator_qubit_indices,measurement_assignment))
+
+        H_reduced = QubitOperator()
+        for h_op in rotated_hamiltonian:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+        all_possible_H.append(H_reduced)
+
+    # find eig vals of all possible terms
+    H_red_eig_vals=[]
+    for H_red in all_possible_H:
+        sparse_H_red = get_sparse_operator(H_red)
+        if sparse_H_red.shape[0]< 128:
+            eigvals, eigvecs = np.linalg.eigh(sparse_H_red.todense())
+            min_eigval = min(eigvals)
+        else:
+            min_eigval = eigsh(sparse_H_red, k = 1, which = 'SA')[0][0]
+
+        H_red_eig_vals.append(min_eigval)
+
+    return sorted(list(zip(H_red_eig_vals, all_possible_H)), key=lambda x:x[0])
 
 
-def give_sector_from_input_state():
-    pass
+def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, symmetry_generators_pre_rotatation: list,
+                                       qubit_state: np.array, symmetry_generators: list,
+                                       check_correct: bool = False) -> QubitOperator:
+
+
+
+
+    qubit_state_Z_mesaure = -1*((2*qubit_state) - 1) # plus and minus one for Z measurement
+    generator_ind_and_meas_val = {}
+    for sym_op_ind, symm_op in enumerate(symmetry_generators_pre_rotatation):
+
+        sym_gen_sig_qno, coeff = zip(*symm_op.terms.items())
+        sym_qno, sym_paulis = zip(*sym_gen_sig_qno[0])
+        if not ''.join(sym_paulis) == 'Z' * len(sym_qno):
+            raise ValueError(f'Currently function only works for Z generators! {symm_op} not valild')
+        generator_ind_and_meas_val[sym_op_ind] = np.prod(np.take(qubit_state_Z_mesaure, sym_qno)) * coeff[0]
+
+
+    symmetry_generator_qubit_indices = set()
+    for symm_op in symmetry_generators:
+        for Pauliword, coeff in symm_op.terms.items():
+            qNos, _ = zip(*Pauliword)
+            symmetry_generator_qubit_indices.add(*qNos)
+
+    symmetry_generator_signs = [coeff for term in symmetry_generators for coeff in term.terms.values()]
+    for ind, sign in enumerate(symmetry_generator_signs):
+        generator_ind_and_meas_val[ind]*=sign
+
+    # build dictionary to map qubits to new indices
+    n_qubits = count_qubits(rotated_hamiltonian)
+    qubit_inds_kept = set(range(n_qubits)).difference(symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+
+    H_reduced = QubitOperator()
+    for h_op in rotated_hamiltonian:
+        for Pauliword, coeff in h_op.terms.items():
+            new_coeff = coeff
+            qNos, paulis = zip(*Pauliword)
+            for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
+                new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
+
+        qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
+        Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                      if qNo in qNos_reduced])
+
+        H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_correct:
+        sparse_H_full = get_sparse_operator(rotated_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigvals, eigvecs = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigvals)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+
+        sparse_H_red = get_sparse_operator(H_reduced)
+        if sparse_H_red.shape[0]< 128:
+            eigvals, eigvecs = np.linalg.eigh(sparse_H_red.todense())
+            min_eigval = min(eigvals)
+        else:
+            min_eigval = eigsh(sparse_H_red, k = 1, which = 'SA')[0][0]
+
+        if not np.isclose(min_eigval_full, min_eigval):
+            print(min_eigval_full)
+            print(min_eigval)
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
 
 if __name__ ==  '__main__':
+
+    JW_ket = np.eye(2**4)[int('0101',2)].reshape(16,1)
+    JW_array = np.array([0,1,0,1])
 
     H = [QubitOperator('Z0',           random.uniform(5, 10)),
          QubitOperator('Z1',           random.uniform(5, 10)),
@@ -376,23 +547,16 @@ if __name__ ==  '__main__':
 
     generators, rotations = Clifford_operator_reduction_to_X(symmetry_generators)
 
-    H_tapered = deepcopy(H)
+    H_rotated = deepcopy(H)
 
-    for rot in rotations[::-1]:
+    for rot in rotations:
         H_new = QubitOperator()
-        for op in H_tapered:
+        for op in H_rotated:
             H_new += apply_pi4_rotation(rot, op)
-        H_tapered = list(H_new)
-
-
-    H_tapered = reduce(lambda x, y: x + y, H)
-    for rot in rotations[::-1]:
-        rot_op = QubitOperator('', np.cos(np.pi / 4)) + 1j * np.sin(np.pi / 4) * rot
-        rot_op_dag = QubitOperator('', np.cos(np.pi / 4)) - 1j * np.sin(np.pi / 4) * rot
-        H_tapered = rot_op * H_tapered * rot_op_dag
+        H_rotated = H_new
 
     H_old_mat = get_sparse_operator(reduce(lambda x,y:x+y, H))
-    H_new_mat = get_sparse_operator(reduce(lambda x, y: x + y, H_tapered))
+    H_new_mat = get_sparse_operator(reduce(lambda x, y: x + y, H_rotated))
 
     from numpy.linalg import eigh
     eigvecs, eigvals = eigh(H_new_mat.todense())
@@ -400,7 +564,14 @@ if __name__ ==  '__main__':
 
     print(eigvecs)
     print(eigvecs2)
-    print(H_tapered)
+
+    H_tapered_ground = find_ground_sector_using_input_state(H_rotated, symmetry_generators,
+                                                            JW_array, generators,check_correct = True)
+
+    H_tapered_ground_mat = get_sparse_operator(reduce(lambda x,y:x+y, H_tapered_ground))
+    eigvecs, eigvals = eigh(H_tapered_ground_mat.todense())
+    print(eigvals)
 
 
-
+    all_tapered_H = find_sector_brute_force(H_rotated, generators)
+    print(all_tapered_H)
