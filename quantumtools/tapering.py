@@ -1,7 +1,5 @@
 from openfermion.ops import QubitOperator
 import numpy as np
-import scipy as sp
-import sympy
 from copy import deepcopy
 import random
 from openfermion.linalg import get_sparse_operator
@@ -144,8 +142,8 @@ def gf2_gaus_elim(gf2_matrix: np.array) -> np.array:
     while row_i < m_rows and col_j < n_cols:
 
         if sum(gf2_matrix_rref[row_i:, col_j]) == 0:
-            # case when col_j all zeros - therefore skip!
-            row_i += 1
+            # case when col_j all zeros
+            # No pivot in this column, pass to next column
             col_j += 1
             continue
 
@@ -188,41 +186,27 @@ def gf2_gaus_elim(gf2_matrix: np.array) -> np.array:
     return gf2_matrix_rref
 
 
-def get_kernel(mat: np.array) -> np.array:
+def gf2_basis_for_gf2_rref(gf2_matrix_in_rreform: np.array) -> np.array:
     """
-    Function to get the kernal of a matrix (uses scipy)
+    Function that gets the kernel over GF2(2) of ow reduced  gf2 matrix!
+
+    uses method in: https://en.wikipedia.org/wiki/Kernel_(linear_algebra)#Basis
 
     Args:
-        mat (np.array): Matrix to get kernel of.
+        gf2_matrix_in_rreform (np.array): GF(2) matrix in row reduced form
     Returns:
-        null_space_vecs (np.array): the kernel of mat. Note that the columns of this array define the null vectors!
+        basis (np.array): basis for gf2 input matrix that was in row reduced form
     """
-    # columns define each vector (where mat @ vec = zero_vec)
+    rows_to_columns = gf2_matrix_in_rreform.T
+    eye = np.eye(gf2_matrix_in_rreform.shape[1], dtype=int)
 
-    null_space_vecs = sp.linalg.null_space(mat, rcond=None)
+    # do column reduced form as row reduced form
+    rrf = gf2_gaus_elim(np.hstack((rows_to_columns, eye.T)))
 
-    return null_space_vecs
+    zero_rrf = np.where(~rrf[:, :gf2_matrix_in_rreform.shape[0]].any(axis=1))[0]
+    basis = rrf[zero_rrf, gf2_matrix_in_rreform.shape[0]:]
 
-
-def find_span_of_vectors(matrix_of_vectors) -> Tuple[np.array, np.array]:
-    """
-    Function to get span of a given set of vectors. This uses sympy and computes the reduced row echelon form
-    of the input.
-
-    Args:
-        matrix_of_vectors (np.array): Matrix of vectors to give
-    Returns:
-        linearly_ind_vecs_array (np.array): array of linearly independent vectors
-        pivots_array (np.array): array of indices where pivot locations are
-    """
-    m = sympy.Matrix(matrix_of_vectors)
-    # Compute reduced row echelon form (rref).
-    m_rref, pivots = m.rref()
-
-    # convert to numpy
-    linearly_ind_vecs_array = np.abs(np.array(m_rref, dtype=int))
-    pivots_array = np.abs(np.array(pivots, dtype=int))
-    return linearly_ind_vecs_array, pivots_array
+    return basis
 
 
 def apply_pi4_rotation(rot_pauilword_A: QubitOperator, Pauliword_B: QubitOperator) -> QubitOperator:
@@ -362,12 +346,10 @@ def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Tup
     # remove rows of zeros!
     E_tilda = E_tilda[~np.all(E_tilda == 0, axis=1)]
 
-    null_vecs = get_kernel(E_tilda)
-
-    linearly_ind_vecs_array, pivots_array = find_span_of_vectors(null_vecs.T)
+    basis_vecs_of_kernel_for_Etilda = gf2_basis_for_gf2_rref(E_tilda)
 
     symmetry_generators = []
-    for stabilizer in linearly_ind_vecs_array:
+    for stabilizer in basis_vecs_of_kernel_for_Etilda:
         Pword = symplectic_to_pauliword(stabilizer)
         symmetry_generators.append(Pword)
 
@@ -496,20 +478,28 @@ def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, sym
     qubit_inds_kept = set(range(n_qubits)).difference(symmetry_generator_qubit_indices)
     qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
 
-
     H_reduced = QubitOperator()
     for h_op in rotated_hamiltonian:
-        for Pauliword, coeff in h_op.terms.items():
-            new_coeff = coeff
-            qNos, paulis = zip(*Pauliword)
-            for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
-                new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
+                    try:
+                        new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
+                    except:
+                        print(generator_ind_and_meas_val)
+                        print(qNo)
+                        print(symmetry_generators_pre_rotatation)
+                        raise ValueError()
 
-        qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
-        Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
-                                      if qNo in qNos_reduced])
+            qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
 
-        H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
 
     if check_correct:
         sparse_H_full = get_sparse_operator(rotated_hamiltonian)
@@ -559,7 +549,8 @@ def get_ground_tapered_H_using_HF_state(pauli_hamiltonian: QubitOperator, HF_qub
 
 if __name__ ==  '__main__':
 
-    JW_ket = np.eye(2**4)[int('0101',2)].reshape(16,1)
+    # spin up then spin down
+    JW_ket = np.eye(2**4)[int('1010',2)].reshape(16,1)
     JW_array = np.array([0,1,0,1])
 
     H = [QubitOperator('Z0',           random.uniform(5, 10)),
@@ -583,21 +574,19 @@ if __name__ ==  '__main__':
     E_tilda = gf2_gaus_elim(E)
     E_tilda = E_tilda[~np.all(E_tilda == 0, axis=1)] # remove rows of zeros!
 
-    null_vecs = get_kernel(E_tilda)
+    basis_vecs_of_kernel_for_Etilda = gf2_basis_for_gf2_rref(E_tilda)
 
-    linearly_ind_vecs_array, pivots_array = find_span_of_vectors(null_vecs.T)
-    print(linearly_ind_vecs_array)
     symmetry_generators = []
-    for stabilizer in linearly_ind_vecs_array:
+    for stabilizer in basis_vecs_of_kernel_for_Etilda:
         Pword = symplectic_to_pauliword(stabilizer)
         print(Pword)
         symmetry_generators.append(Pword)
 
-    generators, rotations = Clifford_operator_reduction_to_X(symmetry_generators)
+    single_X_generators, cliff_rotations = Clifford_operator_reduction_to_X(symmetry_generators)
 
     H_rotated = deepcopy(H)
 
-    for rot in rotations:
+    for rot in cliff_rotations:
         H_new = QubitOperator()
         for op in H_rotated:
             H_new += apply_pi4_rotation(rot, op)
@@ -614,11 +603,11 @@ if __name__ ==  '__main__':
     print(min(eigvals2))
 
 
-    all_tapered_H = find_sector_brute_force(H_rotated, generators)
+    all_tapered_H = find_sector_brute_force(H_rotated, single_X_generators)
     print(all_tapered_H)
 
     H_tapered_ground = find_ground_sector_using_input_state(H_rotated, symmetry_generators,
-                                                            JW_array, generators,check_correct = True)
+                                                            JW_array, single_X_generators,check_correct = True)
 
     H_tapered_ground_mat = get_sparse_operator(reduce(lambda x,y:x+y, H_tapered_ground))
     eigvals3, eigvecs3 = eigh(H_tapered_ground_mat.todense())
@@ -629,3 +618,6 @@ if __name__ ==  '__main__':
 
     H_tap = get_ground_tapered_H_using_HF_state(reduce(lambda x,y:x+y, H), JW_array, check_tapering=True)
     print(H_tap == H_tapered_ground)
+
+
+
