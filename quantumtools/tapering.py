@@ -143,9 +143,16 @@ def gf2_gaus_elim(gf2_matrix: np.array) -> np.array:
 
     while row_i < m_rows and col_j < n_cols:
 
+        if sum(gf2_matrix_rref[row_i:, col_j]) == 0:
+            # case when col_j all zeros - therefore skip!
+            row_i += 1
+            col_j += 1
+            continue
+
         # find value and index of largest element in remainder of column j
         k = np.argmax(gf2_matrix_rref[row_i:, col_j]) + row_i
         # + row_i gives correct index for largest value in column j (given we have started from row_i!)
+
 
         # swap row k and row_i (row_i now has 1 in furthest most left position possible)
         gf2_matrix_rref[[k, row_i]] = gf2_matrix_rref[[row_i, k]]
