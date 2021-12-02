@@ -121,19 +121,22 @@ def build_E_matrix(G_matrix: np.array) -> np.array:
     return E_matrix
 
 
-def gf2elim(M: np.array) -> np.array:
+def gf2_gaus_elim(gf2_matrix: np.array) -> np.array:
     """
     Function that performs Gaussian elimination over GF2(2)
     GF is the initialism of Galois field, another name for finite fields.
 
     GF(2) may be identified with the two possible values of a bit and to the boolean values true and false.
 
+    pseudocode: http://dde.binghamton.edu/filler/mct/hw/1/assignment.pdf
+
     Args:
-        M (np.array): GF(2) binary matrix to preform Gaussian elimination over
+        gf2_matrix (np.array): GF(2) binary matrix to preform Gaussian elimination over
     Returns:
-        M (np.array): reduced row echelon form of M
+        gf2_matrix_rref (np.array): reduced row echelon form of M
     """
-    m_rows, n_cols = M.shape
+    gf2_matrix_rref = gf2_matrix.copy()
+    m_rows, n_cols = gf2_matrix_rref.shape
 
     row_i = 0
     col_j = 0
@@ -141,63 +144,34 @@ def gf2elim(M: np.array) -> np.array:
     while row_i < m_rows and col_j < n_cols:
 
         # find value and index of largest element in remainder of column j
-        k = np.argmax(M[row_i:, col_j]) + row_i
+        k = np.argmax(gf2_matrix_rref[row_i:, col_j]) + row_i
         # + row_i gives correct index for largest value in column j (given we have started from row_i!)
 
-        # swap rows
-        temp = np.copy(M[k])
-        M[k] = M[row_i]
-        M[row_i] = temp
+        # swap row k and row_i (row_i now has 1 in furthest most left position possible)
+        gf2_matrix_rref[[k, row_i]] = gf2_matrix_rref[[row_i, k]]
 
-        aijn = M[row_i, col_j:]
+        # with important term moved to row_i... take this row and all columns from col_j - > n (last column)
+        i_jn = gf2_matrix_rref[row_i, col_j:]
 
-        col = np.copy(M[:, col_j])  # make a copy otherwise M will be directly affected
+        # make a copy of all rows (0 -> M) and column_j to stop it being effected by certain operations
+        Om_j = np.copy(gf2_matrix_rref[:, col_j])
 
-        # zero out i th row (to avoid xoring pivot row with itself)
-        col[row_i] = 0
+        # zero out row_i for 1D 0m_j vector (to avoid xoring pivot at i^th position with itself and it becoming all zero)
+        Om_j[row_i] = 0
 
-        flip = np.outer(col, aijn)
+        # get matrix to zero out out j^th column of gf2_matrix_rref (note won't effect ith row!)
+        # note does import i_th row (i_jn) dotted with j_th column (with zero in i_th position of j_column)
+        # this ensures that j^th column will be zero for all indices (apart from i_th), which should be 1
+        flip = np.einsum('i,j->ij', Om_j, i_jn, optimize=True)
 
-        M[:, col_j:] = M[:, col_j:] ^ flip
+        # perform xor:  gf2_matrix_rref[:, col_j:] ^ flip
+        # to zero out j_th  column of all rows (bar i_th)
+        gf2_matrix_rref[:, col_j:] = np.bitwise_xor(gf2_matrix_rref[:, col_j:], flip)
 
         row_i += 1
         col_j += 1
 
-    return M
-
-
-def gf2elim(M):
-
-    m,n = M.shape
-
-    i=0
-    j=0
-
-    while i < m and j < n:
-        # find value and index of largest element in remainder of column j
-        k = np.argmax(M[i:, j]) +i
-
-        # swap rows
-        #M[[k, i]] = M[[i, k]] this doesn't work with numba
-        temp = np.copy(M[k])
-        M[k] = M[i]
-        M[i] = temp
-
-
-        aijn = M[i, j:]
-
-        col = np.copy(M[:, j]) #make a copy otherwise M will be directly affected
-
-        col[i] = 0 #avoid xoring pivot row with itself
-
-        flip = np.outer(col, aijn)
-
-        M[:, j:] = M[:, j:] ^ flip
-
-        i += 1
-        j +=1
-
-    return M
+    return gf2_matrix_rref
 
 
 def get_kernel(mat: np.array) -> np.array:
@@ -369,7 +343,7 @@ def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Tup
     G_mat= build_G_matrix(list(pauli_hamiltonian), n_qubits)
     E_mat = build_E_matrix(G_mat)
 
-    E_tilda = gf2elim(E_mat)
+    E_tilda = gf2_gaus_elim(E_mat)
 
     # remove rows of zeros!
     E_tilda = E_tilda[~np.all(E_tilda == 0, axis=1)]
@@ -547,12 +521,16 @@ def find_ground_sector_using_input_state(rotated_hamiltonian: QubitOperator, sym
 
 
 def get_ground_tapered_H_using_HF_state(pauli_hamiltonian: QubitOperator, HF_qubit_state: np.array,
-                                        check_tapering:bool = False):
+                                        check_tapering:bool = False) -> QubitOperator:
     """
     Function that returns tapered Hamiltonian, where HF ground state is used to define the Sector
 
     Args:
         pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        HF_qubit_state (np.array): ket as numpy array representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
     Returns:
         H_tapered (QubitOperator): ground state tapered Hamiltonian
     """
@@ -588,7 +566,7 @@ if __name__ ==  '__main__':
 
     G = build_G_matrix(H, 4)
     E = build_E_matrix(G)
-    E_tilda = gf2elim(E)
+    E_tilda = gf2_gaus_elim(E)
     E_tilda = E_tilda[~np.all(E_tilda == 0, axis=1)] # remove rows of zeros!
 
     null_vecs = get_kernel(E_tilda)
