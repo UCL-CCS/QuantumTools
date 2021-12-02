@@ -149,31 +149,38 @@ def gf2_gaus_elim(gf2_matrix: np.array) -> np.array:
             col_j += 1
             continue
 
-        # find value and index of largest element in remainder of column j
+        # find index of row with first "1" in the vector defined by column j (note previous if statement removes all zero column)
         k = np.argmax(gf2_matrix_rref[row_i:, col_j]) + row_i
-        # + row_i gives correct index for largest value in column j (given we have started from row_i!)
+        # + row_i gives correct index (as we start search from row_i!)
 
-
-        # swap row k and row_i (row_i now has 1 in furthest most left position possible)
+        # swap row k and row_i (row_i now has 1 at top of column j... aka: gf2_matrix_rref[row_i, col_j]==1)
         gf2_matrix_rref[[k, row_i]] = gf2_matrix_rref[[row_i, k]]
+        # next need to zero out all other ones present in column j (apart from on the i_row!)
+        # to do this use row_i and use modulo addition to zero other columns!
 
-        # with important term moved to row_i... take this row and all columns from col_j - > n (last column)
-        i_jn = gf2_matrix_rref[row_i, col_j:]
-
-        # make a copy of all rows (0 -> M) and column_j to stop it being effected by certain operations
+        # make a copy of j_th column of gf2_matrix_rref, this includes all rows (0 -> M)
         Om_j = np.copy(gf2_matrix_rref[:, col_j])
 
-        # zero out row_i for 1D 0m_j vector (to avoid xoring pivot at i^th position with itself and it becoming all zero)
+        # zero out the i^th position of vector Om_j (this is why copy needed... to stop it affecting gf2_matrix_rref)
         Om_j[row_i] = 0
+        # note this was orginally 1 by definition...
+        # This vector now defines the indices of the rows we need to zero out
+        # by setting ith position to zero - it stops the next steps zeroing out the i^th row (which we need as our pivot)
 
-        # get matrix to zero out out j^th column of gf2_matrix_rref (note won't effect ith row!)
-        # note does import i_th row (i_jn) dotted with j_th column (with zero in i_th position of j_column)
-        # this ensures that j^th column will be zero for all indices (apart from i_th), which should be 1
-        flip = np.einsum('i,j->ij', Om_j, i_jn, optimize=True)
 
-        # perform xor:  gf2_matrix_rref[:, col_j:] ^ flip
-        # to zero out j_th  column of all rows (bar i_th)
-        gf2_matrix_rref[:, col_j:] = np.bitwise_xor(gf2_matrix_rref[:, col_j:], flip)
+        # next from row_i of rref matrix take all columns from j->n (j to last column)
+        # this is vector of zero and ones from row_i of gf2_matrix_rref
+        i_jn = gf2_matrix_rref[row_i, col_j:]
+        # we use i_jn to zero out the rows in gf2_matrix_rref[:, col_j:] that have leading one (apart from row_i!)
+        # which rows are these? They are defined by that Om_j vector!
+
+        # the matrix to zero out these rows is simply defined by the outer product of Om_j and i_jn
+        # this creates a matrix of rows of i_jn terms where Om_j=1 otherwise rows of zeros (where Om_j=0)
+        Om_j_dependent_rows_flip = np.einsum('i,j->ij', Om_j, i_jn, optimize=True)
+        # note flip matrix is contains all m rows ,but only j->n columns!
+
+        # perfrom bitwise xor of flip matrix to zero out rows in col_j that that contain a leading '1' (apart from row i)
+        gf2_matrix_rref[:, col_j:] = np.bitwise_xor(gf2_matrix_rref[:, col_j:], Om_j_dependent_rows_flip)
 
         row_i += 1
         col_j += 1
