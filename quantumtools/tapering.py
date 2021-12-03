@@ -8,6 +8,7 @@ from functools import reduce
 from typing import Tuple, List
 import itertools
 from scipy.sparse.linalg import eigsh
+from collections import namedtuple
 
 
 def pauliword_to_symplectic(n_qubits: int, QubitOp: QubitOperator) -> np.array:
@@ -324,6 +325,125 @@ def Clifford_operator_reduction_to_X(list_symmetry_generators) -> Tuple[list, li
     return single_qubit_generators, rotations
 
 
+def Global_commuting_terms_reduction_to_single_Q_ops(array_of_symmetry_generators_sympletic) -> list:
+    """
+    Function takes in an matrix of sympletic vectors that represent the symmetry generator operators that globally commute
+    with the full Hamiltonian. (These are the basis for the kernel of Etilda).
+
+    Output from gf2_basis_for_gf2_rref function can be used!
+
+    and maps these Pauli operators to to single qubit Pauli operators using U operators. Which pauli is defined by
+    anti_comm_pauli dictionary in code. This can be changed (but key value Paulis must anticommute).
+
+    These U operators are NOT GENERAL CLIFFORD OPERATORS! However, as the symmetry generators globally
+    commute with the full Hamiltonian they end up doing the same clifford operation. We explicitly write this here:
+
+    U = 1/2(^0.5)(G_{j} + σ^{j})
+
+    # σ = {X,Y,Z}
+    # σ is chosen such that it anti-commutes with G_{j} and commutes with all other G_{i=!j} in G
+
+    The action is as follows:
+
+    U_{i} G_{i} U_{i} = 1/2 ( G_{i} + σ^{i} ) G_{i} ( G_{i} + σ^{i} )
+                      = 1/2  ( I +  σ^{i} G_{i} ) ( G_{i} + σ^{i} )
+                      = 1/2  ( G_{i} + σ^{i} +  σ^{i} + σ^{i} G_{i}σ^{i} )
+                      = 1/2  ( G_{i} + σ^{i} +  σ^{i} -  G_{i} )      #using  {G_{i}, σ^{i}} = 0
+                      = σ^{i}
+
+    note the effectof U_{i} on the other generators (where we have set condition that [G_{j}, σ^{i}] = 0
+    note for U_{i} G_{j} U_{i} = 1/2 ( G_{i} + σ^{i} ) G_{j} ( G_{i} + σ^{i} )
+                               = 1/2 ( G_{i}G_{j} + σ^{i}G_{j} )  ( G_{i} + σ^{i} )
+                               = 1/2 ( G_{i}G_{j}G_{i} + G_{i}G_{j}σ^{i} + σ^{i}G_{j} G_{i} + σ^{i}G_{j}σ^{i}  )
+                               = 1/2 ( G_{j} + G_{i}G_{j}σ^{i} + G_{j}σ^{i} G_{i} + G_{j}  )   # using [G_{j}, σ^{i}] = 0
+                               = 1/2 ( G_{j} + [G_{j}, σ^{i}]G_{i}  + G_{j}  )
+                               = G_{j}
+
+
+    Note as all the G_i terms commute globally with H... The action of U_{i} H U_{i} doesn't result in more terms.
+    However, a general 1/2(^0.5)(P + σ^{j}) would result in more terms in H (aka have structure from global commutation!)
+    Hence why we say that each U is like clifford operation.
+
+    Args:
+        list_symmetry_generators (list): list of INDEPENDENT symmetry operators (QubitOperator)
+    Returns:
+        single_qubit_generators (list): list of symmetry operators that have been mapped to single Pauli X terms
+        rotations (list): list of cliford rotations used to reduce all symmetry operators to single Pauli X terms
+    """
+    anti_comm_pauli = {
+        'X': 'Z',
+        'Y': 'Z',
+        'Z': 'X'}
+
+    # find unique qubit indices
+    n_qubits = array_of_symmetry_generators_sympletic.shape[1] // 2
+
+    # get unique qubit indices of commuting pauli generators
+    column_sum = np.einsum('ij->j', array_of_symmetry_generators_sympletic)
+    unqiue_qubit_indices = set(np.where(column_sum[:n_qubits] + column_sum[n_qubits:] <= 2)[0])
+
+    U_op = namedtuple('U_op', 'Gi Si')
+    list_clifford_like_rot = []
+    for symmetry_op_sympletic in array_of_symmetry_generators_sympletic:
+
+        symmetry_op = symplectic_to_pauliword(symmetry_op_sympletic)
+
+        sym_op_qNos_Paulis, sym_op_coeff = zip(*symmetry_op.terms.items())
+        sym_op_qNos, sym_op_Paulis = zip(*sym_op_qNos_Paulis[0])
+
+        # find unique qubit index of independent commuting generator!
+        unqiue_indices = list(set(sym_op_qNos).intersection(unqiue_qubit_indices))
+        unqiue_index = unqiue_indices[0]
+
+        # pauli of Gi in unique position
+        pauli = sym_op_Paulis[sym_op_qNos.index(unqiue_index)]
+
+        sigma_op = QubitOperator(f'{anti_comm_pauli[pauli]}{unqiue_index}', 1)
+
+        # U = const * (symmetry_op + sigma_op)
+        list_clifford_like_rot.append(U_op(Gi= symmetry_op, Si=sigma_op))
+
+    return list_clifford_like_rot
+
+
+def Apply_U_tapering_symmetry_rotations(pauli_hamiltonian: QubitOperator, list_of_U_op_rotations, n_qubits: int):
+
+    # TODO: can probably do this symbolically instead!
+    # note need to keep track of rotated H (this is where was and is now fixed... note too sure about
+    # commutativity check using sympletic form of full H! Maybe check generators and U_ops! May be okay as indpedent.
+
+    if isinstance(pauli_hamiltonian, QubitOperator):
+        pauli_hamiltonian = list(pauli_hamiltonian)
+
+    H_sympletic = build_G_matrix(pauli_hamiltonian, n_qubits)
+    zero_mat = np.zeros((n_qubits, n_qubits), dtype=int)
+    I_mat = np.eye(n_qubits, dtype=int)
+    J_symplectic = np.block([
+        [zero_mat, I_mat],
+        [I_mat, zero_mat]
+    ])
+    HT_J = np.transpose(H_sympletic) @ J_symplectic
+
+    rotated_H = deepcopy(pauli_hamiltonian)
+    for named_op in list_of_U_op_rotations:
+        G_i = named_op.Gi
+        single_qubit_pauli = named_op.Si
+
+        sympletic_single_q = pauliword_to_symplectic(n_qubits, single_qubit_pauli)
+        sympletic_commutativity = HT_J@sympletic_single_q
+        commutativity = (sympletic_commutativity+1)%2
+
+        for ind, comm_flag in enumerate(commutativity):
+            pauli_h = rotated_H[ind]
+            if comm_flag ==1:
+                rotated_H[ind] = pauli_h
+            else:
+                rotated_H[ind] = G_i*single_qubit_pauli*pauli_h
+
+    return rotated_H
+
+
+
 def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Tuple[QubitOperator, list, list, list]:
     """
     Function maps list of symmetry operators to single qubit Pauli X operators using Clifford rotations
@@ -620,4 +740,33 @@ if __name__ ==  '__main__':
     print(H_tap == H_tapered_ground)
 
 
+def Apply_U_tapering_symmetry_rotations(pauli_hamiltonian: QubitOperator, list_of_U_op_rotations, n_qubits: int):
 
+    rotated_H = QubitOperator()
+    for named_op in list_of_U_op_rotations:
+        G_i = named_op.Gi
+        single_qubit_pauli = named_op.Si
+        for pauli_h in pauli_hamiltonian:
+            if pauli_h*single_qubit_pauli == single_qubit_pauli*pauli_h:
+                # print('commutes: ', single_qubit_pauli, pauli_h)
+                rotated_H += pauli_h
+            else:
+                # print('anticommutes: ', single_qubit_pauli, pauli_h)
+                rotated_H += G_i * single_qubit_pauli * pauli_h
+
+    return rotated_H
+
+
+def Apply_U_tapering_symmetry_rotations(pauli_hamiltonian: QubitOperator, list_of_U_op_rotations, n_qubits: int):
+
+    rotated_H = QubitOperator()
+    for named_op in list_of_U_op_rotations[::-1]:
+        G_i = named_op.Gi
+        single_qubit_pauli = named_op.Si
+        rot = 1/np.sqrt(2) * (single_qubit_pauli + G_i)
+        print(rot)
+        for pauli_h in pauli_hamiltonian:
+            new_p = rot * pauli_h * rot
+            rotated_H+=new_p
+
+    return rotated_H
