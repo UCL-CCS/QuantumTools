@@ -2,9 +2,9 @@
 
 import json
 import logging
+from functools import cached_property
 from pathlib import Path
 from typing import Dict, Optional, Union
-from functools import cached_property
 
 import pennylane as qml
 from openfermion.ops.operators.qubit_operator import QubitOperator
@@ -16,6 +16,7 @@ from qiskit_nature.operators.second_quantization import SpinOp
 from .exceptions import QHamConverterError
 
 logger = logging.getLogger(__name__)
+
 
 class QHamConverter:
     """Class to create and output qubit hamiltonians."""
@@ -42,7 +43,7 @@ class QHamConverter:
             self.n_qubits = len(next(iter(input_hamiltonian.keys())))
             self._intermediate = input_hamiltonian
         elif type(input_hamiltonian) in [Path, str]:
-            self._read_file(input_hamiltonian)
+            self._intermediate = self._read_file(input_hamiltonian)
         else:
             raise TypeError(
                 "Input Hamiltonian must be an openfermion.QubitOperator or path."
@@ -75,6 +76,7 @@ class QHamConverter:
 
         with open(filepath, "w") as file:
             file.write(json_ir)
+        return
 
     def _read_file(self, filepath) -> Dict[str, float]:
         """Read the Intermediate Representation from a file.
@@ -108,7 +110,7 @@ class QHamConverter:
         if error_string:
             raise QHamConverterError(error_string)
 
-        self._intermediate = intermediate
+        return intermediate
 
     def _of_to_int(self) -> Dict[str, float]:
         """Construct intermediate representation of qubit hamiltonian from openfermion representation.
