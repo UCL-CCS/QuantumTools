@@ -1,5 +1,8 @@
 
-from quantumtools.tapering import get_ground_tapered_H_using_HF_state, find_all_sectors, get_rotated_operator_and_generators
+from quantumtools.tapering import (get_ground_tapered_H_using_HF_state,
+                                   find_all_sectors,
+                                   get_rotated_operator_and_generators,
+                                   find_sector_using_input_state)
 from pathlib import Path
 from openfermion.chem.molecular_data import spinorb_from_spatial
 from openfermion.ops.representations import (
@@ -143,8 +146,20 @@ def test_full_spectrum_tapered():
     eigvals2 = eigsh(H_full_rotated, k=1, which='SA')[0][0]
     assert np.allclose(eigvals, eigvals2)
 
+    # by state
+    JW_state = np.zeros(one_body_coefficients.shape[0])
+    JW_state[:full_system_mol.nelectron] = np.ones(full_system_mol.nelectron)
+    H_tapered_sector_by_state = find_sector_using_input_state(H_rotated,
+                                                              U_clifford_rotations,
+                                                              JW_state,
+                                                              check_eigenvalue_by_ind=0)
+    eigvals4 = eigsh(get_sparse_operator(H_tapered_sector_by_state), k=1, which='SA')[0][0]
+    assert np.allclose(eigvals, eigvals4)
+
+    # full spectrum
     full_spectrum_tapered = find_all_sectors(H_rotated, U_clifford_rotations)
     H_tap_ground = full_spectrum_tapered[0][1][0]
     H_tap_ground_mat = get_sparse_operator(reduce(lambda x, y: x + y, H_tap_ground))
     eigvals3 = eigsh(H_tap_ground_mat, k=1, which='SA')[0][0]
     assert np.allclose(eigvals, eigvals3)
+

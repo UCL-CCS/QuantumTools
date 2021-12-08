@@ -382,7 +382,8 @@ def Global_commuting_terms_reduction_to_single_Q_ops(array_of_symmetry_generator
 
     # get unique qubit indices of commuting pauli generators
     column_sum = np.einsum('ij->j', array_of_symmetry_generators_sympletic)
-    unqiue_qubit_indices = set(np.where(column_sum[:n_qubits] + column_sum[n_qubits:] <= 2)[0])
+    XZ_array = column_sum[:n_qubits] + column_sum[n_qubits:]
+    unqiue_qubit_indices = set(np.where(np.logical_and(XZ_array>0, XZ_array<=2))[0])
 
     U_op = namedtuple('U_op', 'Gi Si')
     list_clifford_like_rot = []
@@ -512,12 +513,14 @@ def find_all_sectors(rotated_hamiltonian: QubitOperator, list_of_U_op_rotations:
         H_rotated (QubitOperator): QubitOperator that has been rotated according to symmetry operators
         symmetry_generators (list): list of symmetry operators that have been rotated to be single Pauli X terms
     """
-    symmetry_generator_qubit_indices = set()
-    for u_op in list_of_U_op_rotations:
-        single_qubit_generator = u_op.Si
-        for Pauliword, coeff in single_qubit_generator.terms.items():
-            qNos, _ = zip(*Pauliword)
-            symmetry_generator_qubit_indices.add(*qNos)
+    # symmetry_generator_qubit_indices = set()
+    # for u_op in list_of_U_op_rotations:
+    #     single_qubit_generator = u_op.Si
+    #     for Pauliword, coeff in single_qubit_generator.terms.items():
+    #         qNos, _ = zip(*Pauliword)
+    #         symmetry_generator_qubit_indices.add(*qNos)
+    symmetry_generator_qubit_indices = set(qNos for u_op in list_of_U_op_rotations for
+                                           qNos, paulis in list(u_op.Si.terms.keys())[0])
 
     # build dictionary to map qubits to new indices
     n_qubits = count_qubits(rotated_hamiltonian)
@@ -530,17 +533,20 @@ def find_all_sectors(rotated_hamiltonian: QubitOperator, list_of_U_op_rotations:
         generator_ind_and_meas_val = dict(zip(symmetry_generator_qubit_indices,measurement_assignment))
         H_reduced = QubitOperator()
         for h_op in rotated_hamiltonian:
-            for Pauliword, coeff in h_op.terms.items():
-                new_coeff = coeff
-                qNos, paulis = zip(*Pauliword)
-                for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
-                    new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
+            if list(h_op.terms.keys())[0] == ():
+                # identity term
+                H_reduced += h_op
+            else:
+                for Pauliword, coeff in h_op.terms.items():
+                    new_coeff = coeff
+                    qNos, paulis = zip(*Pauliword)
+                    for qNo in set(qNos).intersection(symmetry_generator_qubit_indices):
+                        new_coeff = new_coeff*generator_ind_and_meas_val[qNo]
 
-            qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
-            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
-                                          if qNo in qNos_reduced])
-
-            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+                qNos_reduced = set(qNos).difference(symmetry_generator_qubit_indices)
+                Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                              if qNo in qNos_reduced])
+                H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
         all_possible_H.append((H_reduced, generator_ind_and_meas_val))
 
     # find eig vals of all possible terms
@@ -551,7 +557,7 @@ def find_all_sectors(rotated_hamiltonian: QubitOperator, list_of_U_op_rotations:
             eigvals, eigvecs = np.linalg.eigh(sparse_H_red.todense())
             min_eigval = min(eigvals)
         else:
-            min_eigval = eigsh(sparse_H_red, k = 1, which = 'SA')[0][0]
+            min_eigval = eigsh(sparse_H_red, k=1, which = 'SA')[0][0]
 
         H_red_eig_vals.append(min_eigval)
 
@@ -621,7 +627,7 @@ def find_sector_using_input_state(rotated_hamiltonian: QubitOperator, list_of_U_
 
             H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
 
-    if check_eigenvalue_by_ind:
+    if check_eigenvalue_by_ind is not None:
         sparse_H_full = get_sparse_operator(rotated_hamiltonian)
         if sparse_H_full.shape[0] < 128:
             eigenValues, eigenVectors = np.linalg.eigh(sparse_H_full.todense())
@@ -641,6 +647,7 @@ def find_sector_using_input_state(rotated_hamiltonian: QubitOperator, list_of_U_
             min_eigval = eigvals[check_eigenvalue_by_ind] #min(eigvals)
         else:
             min_eigval = eigsh(sparse_H_red, k=(check_eigenvalue_by_ind+1), which = 'SA')[0][0]
+
 
         if not np.isclose(min_eigval_full, min_eigval):
             print(min_eigval_full)
