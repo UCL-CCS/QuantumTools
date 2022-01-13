@@ -495,7 +495,7 @@ def get_rotated_operator_and_generators(pauli_hamiltonian: QubitOperator) -> Tup
     basis_vecs_of_kernel_for_Etilda = gf2_basis_for_gf2_rref(E_tilda)
 
     U_clifford_rotations = Global_commuting_terms_reduction_to_single_Q_ops(basis_vecs_of_kernel_for_Etilda)
-    H_rotated  = Apply_U_tapering_symmetry_rotations(pauli_hamiltonian, U_clifford_rotations)
+    H_rotated = Apply_U_tapering_symmetry_rotations(pauli_hamiltonian, U_clifford_rotations)
 
     return H_rotated, U_clifford_rotations
 
@@ -564,54 +564,57 @@ def find_all_sectors(rotated_hamiltonian: QubitOperator, list_of_U_op_rotations:
     return sorted(list(zip(H_red_eig_vals, all_possible_H)), key=lambda x:x[0])
 
 
-def find_sector_using_input_state(rotated_hamiltonian: QubitOperator, list_of_U_op_rotations: list,
-                                       qubit_state: np.array, check_eigenvalue_by_ind: int = None) -> QubitOperator:
+def get_ground_tapered_H_analytic(pauli_hamiltonian: QubitOperator,
+                                        check_tapering:bool = False) -> QubitOperator:
     """
-    Function that returns tapered Hamiltonian according to given qubit_state.
+    Function that returns ground state tapered Hamiltonian
 
-    Function gets the eigenvalues of symmetry_generators_pre_rotatation measured on the input qubit state
-    and uses these to define the measurements of the symmetry_generators (rather than brute force searching over
-    all possible measurement assignments to them).
-
-    Note check_correct performs diagonlisation of the full rotated_hamiltonian (contains all qubits of problem)
-    and compares minimum eigenvalue to tapered H (fewer qubits)
-    This can be expensive to check!
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
 
     Args:
-        rotated_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
-        symmetry_generators_pre_rotatation (list): List of symmetry generators before clifford rotations
-        qubit_state (np.array): qubit state that defines eigenvalues of symmetry_generators_pre_rotatation
-        symmetry_generators (list): List of single qubit X symmetry generators
-        check_eigenvalue_by_ind (int): optional int to compare eigenvalue ith (starting from the lowest) - defined by input index
-        - to that of the rotated_hamiltonian (no qubits removed). Ground state would by 0, first excited state 1 ... etc
+        pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
     Returns:
-        H_reduced (QubitOperator): ground state tapered Hamiltonian
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
     """
-    qubit_state_Z_mesaure = -1*((2*qubit_state) - 1) # plus and minus one for Z measurement
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    sparse_H_rot = get_sparse_operator(H_rotated)
+    if sparse_H_rot.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H_rot.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H_rot, k=1, which='SA')
+
     single_sig_q_ind_and_meas_val = {}
     single_s_symmetry_generator_qubit_indices = set()
-    for sym_op_ind, u_op in enumerate(list_of_U_op_rotations):
-        G_symm_op = u_op.Gi
-        sym_gen_sig_qno, coeff = zip(*G_symm_op.terms.items())
-        sym_qno, sym_paulis = zip(*sym_gen_sig_qno[0])
-        if not ''.join(sym_paulis) == 'Z' * len(sym_qno):
-            raise ValueError(f'Currently function only works for Z generators! {G_symm_op} not valild')
-
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
         single_q_op, coeff = zip(*u_op.Si.terms.items())
         single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
         unique_q_index = single_q_op_qNos[0]
         single_s_symmetry_generator_qubit_indices.add(unique_q_index)
 
-        single_sig_q_ind_and_meas_val[unique_q_index] = np.prod(np.take(qubit_state_Z_mesaure, sym_qno)) * coeff[0]
-        # print(f'<{G_symm_op}> = {np.prod(np.take(qubit_state_Z_mesaure, sym_qno))}, for: {qubit_state}')
+        op_measure = get_sparse_operator(u_op.Si, n_qubits=n_qubits)
+        stabilizer_eigenvalue = ((min_eigvec_full.conj().T @ op_measure @ min_eigvec_full)[0][0]).real
+        if stabilizer_eigenvalue>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
 
+    print(single_sig_q_ind_and_meas_val)
     # build dictionary to map qubits to new indices
-    n_qubits = count_qubits(rotated_hamiltonian)
     qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
-    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+    qubit_relabel = dict(zip(sorted(qubit_inds_kept), range(len(qubit_inds_kept))))
 
     H_reduced = QubitOperator()
-    for h_op in rotated_hamiltonian:
+    for h_op in H_rotated:
         if not list(h_op.terms.keys())[0]:
             H_reduced += h_op
         else:
@@ -624,63 +627,100 @@ def find_sector_using_input_state(rotated_hamiltonian: QubitOperator, list_of_U_
             qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
             Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
                                           if qNo in qNos_reduced])
-
             H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
 
-    if check_eigenvalue_by_ind is not None:
-        sparse_H_full = get_sparse_operator(rotated_hamiltonian)
-        if sparse_H_full.shape[0] < 128:
-            eigenValues, eigenVectors = np.linalg.eigh(sparse_H_full.todense())
-            idx = eigenValues.argsort()
-            eigvals = eigenValues[idx]
-            # eigvecs = eigenVectors[:, idx]
-            min_eigval_full = eigvals[check_eigenvalue_by_ind]
+    if check_tapering:
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
         else:
-            min_eigval_full = eigsh(sparse_H_full, k=(check_eigenvalue_by_ind+1), which='SA')[0][0]
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
 
-        sparse_H_red = get_sparse_operator(H_reduced)
-        if sparse_H_red.shape[0]< 128:
-            eigenValues, eigenVectors = np.linalg.eigh(sparse_H_red.todense())
-            idx = eigenValues.argsort()
-            eigvals = eigenValues[idx]
-            # eigvecs = eigenVectors[:, idx]
-            min_eigval = eigvals[check_eigenvalue_by_ind] #min(eigvals)
-        else:
-            min_eigval = eigsh(sparse_H_red, k=(check_eigenvalue_by_ind+1), which = 'SA')[0][0]
-
-
-        if not np.isclose(min_eigval_full, min_eigval):
-            print(min_eigval_full)
-            print(min_eigval)
+        if not np.isclose(min_eigval_tap, min_eigval_full):
             raise ValueError('wrong sector found')
 
     return H_reduced
 
 
-def get_ground_tapered_H_using_HF_state(pauli_hamiltonian: QubitOperator, HF_qubit_state: np.array,
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
                                         check_tapering:bool = False) -> QubitOperator:
     """
-    Function that returns tapered Hamiltonian, where HF ground state is used to define the Sector
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
 
     Args:
-        pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
-        HF_qubit_state (np.array): ket as numpy array representing qubit state used to define sector (note
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
                                    symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
         check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
                                 diagonalization - can be expensive!)
     Returns:
         H_tapered (QubitOperator): ground state tapered Hamiltonian
     """
     H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    qubit_state_Z_mesaure = -1 * ((2 * qubit_state) - 1)  # plus and minus one for Z measurement
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        # Z measurement on unique qubit index
+        single_sig_q_ind_and_meas_val[unique_q_index] = qubit_state_Z_mesaure[unique_q_index] * coeff[0]
+
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
 
     if check_tapering:
-        H_tapered = find_sector_using_input_state(H_rotated, U_clifford_rotations, HF_qubit_state,
-                                                  check_eigenvalue_by_ind=0) # <- zero th
-    else:
-        H_tapered = find_sector_using_input_state(H_rotated, U_clifford_rotations, HF_qubit_state,
-                                                  check_eigenvalue_by_ind=None)
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
 
-    return H_tapered
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
 
 
 if __name__ ==  '__main__':
@@ -689,21 +729,37 @@ if __name__ ==  '__main__':
     JW_ket = np.eye(2**4)[int('1010',2)].reshape(16,1)
     JW_array = np.array([0,1,0,1])
 
-    H = [QubitOperator('Z0',           random.uniform(5, 10)),
-         QubitOperator('Z1',           random.uniform(5, 10)),
-         QubitOperator('Z2',           random.uniform(5, 10)),
-         QubitOperator('Z3',           random.uniform(5, 10)),
-         QubitOperator('Z0 Z1',        random.uniform(5, 10)),
-         QubitOperator('Z0 Z2',        random.uniform(5, 10)),
-         QubitOperator('Z0 Z3',        random.uniform(5, 10)),
-         QubitOperator('Z1 Z2',        random.uniform(5, 10)),
-         QubitOperator('Z1 Z3',        random.uniform(5, 10)),
-         QubitOperator('Z2 Z3',        random.uniform(5, 10)),
-         QubitOperator('Y0 Y1 X2 X3 ', random.uniform(5, 10)),
-         QubitOperator('X0 Y1 Y2 X3 ', random.uniform(5, 10)),
-         QubitOperator('Y0 X1 X2 Y3 ', random.uniform(5, 10)),
-         QubitOperator('X0 X1 Y2 Y3 ', random.uniform(5, 10)),
-         ]
+    H = [QubitOperator('',             -0.8121706072487098),
+             QubitOperator('X0 X1 Y2 Y3',  -0.0453026155037993),
+             QubitOperator('X0 Y1 Y2 X3',           random.uniform(5, 10)),
+             QubitOperator('Z3',           random.uniform(5, 10)),
+             QubitOperator('Z0 Z1',        random.uniform(5, 10)),
+             QubitOperator('Z0 Z2',        random.uniform(5, 10)),
+             QubitOperator('Z0 Z3',        random.uniform(5, 10)),
+             QubitOperator('Z1 Z2',        random.uniform(5, 10)),
+             QubitOperator('Z1 Z3',        random.uniform(5, 10)),
+             QubitOperator('Z2 Z3',        random.uniform(5, 10)),
+             QubitOperator('Y0 Y1 X2 X3 ', random.uniform(5, 10)),
+             QubitOperator('X0 Y1 Y2 X3 ', random.uniform(5, 10)),
+             QubitOperator('Y0 X1 X2 Y3 ', random.uniform(5, 10)),
+             QubitOperator('X0 X1 Y2 Y3 ', random.uniform(5, 10)),
+             ]
+    H_dic = {(): -0.8121706072487098,
+     ((0, 'Z'),): 0.17141282644776892,
+     ((1, 'Z'),): 0.17141282644776895,
+     ((2, 'Z'),): -0.223431536908136,
+     ((3, 'Z'),): -0.223431536908136,
+     ((0, 'Z'), (1, 'Z')): 0.16868898170361213,
+     ((0, 'Z'), (2, 'Z')): 0.12062523483390426,
+     ((0, 'Z'), (3, 'Z')): 0.16592785033770355,
+     ((1, 'Z'), (2, 'Z')): 0.16592785033770355,
+     ((1, 'Z'), (3, 'Z')): 0.12062523483390426,
+     ((2, 'Z'), (3, 'Z')): 0.17441287612261608,
+     ((0, 'X'), (1, 'X'), (2, 'Y'), (3, 'Y')): -0.0453026155037993,
+     ((0, 'X'), (1, 'Y'), (2, 'Y'), (3, 'X')): 0.0453026155037993,
+     ((0, 'Y'), (1, 'X'), (2, 'X'), (3, 'Y')): 0.0453026155037993,
+     ((0, 'Y'), (1, 'Y'), (2, 'X'), (3, 'X')): -0.0453026155037993}
+    H = [QubitOperator(P, const) for P, const in H_dic.items()]
 
     G = build_G_matrix(H, 4)
     E = build_E_matrix(G)
@@ -727,5 +783,1261 @@ if __name__ ==  '__main__':
 
     full_spectrum_tapered = find_all_sectors(H_rotated, U_list)
 
-    H_tapered_sector_by_state = find_sector_using_input_state(H_rotated, U_list, JW_array, check_eigenvalue_by_ind=0)
+    H_tapered_sector_by_state = get_ground_tapered_H_by_qubit_state(reduce(lambda x,y:x+y, H),
+                                                                    JW_array,
+                                                                    check_tapering=True)
 
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        U_OP = 1/np.sqrt(2)*(u_op.Gi + u_op.Si)
+        q_ket = get_sparse_operator(U_OP, n_qubits=n_qubits)@q_ket
+
+    qubit_state_Z_mesaure = -1 * ((2 * qubit_state) - 1)  # plus and minus one for Z measurement
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        Z_ops, coeff = zip(*u_op.Gi.terms.items())
+        Z_qNos, single_q_op_Paulis = zip(*Z_ops[0])
+        z_sign = np.prod(np.take(qubit_state_Z_mesaure, Z_qNos))
+        # Z measurement on unique qubit index
+        if (qubit_state[unique_q_index]==0) and (z_sign==1):
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        elif (qubit_state[unique_q_index]==0) and (z_sign==-1):
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+        elif (qubit_state[unique_q_index]==1) and (z_sign==-0):
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        elif (qubit_state[unique_q_index]==1) and (z_sign==-1):
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+        else:
+            raise ValueError(f'qubit state: {qubit_state} not valid')
+        q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+        U_OP = 1/np.sqrt(2)*(u_op.Gi + u_op.Si)
+        new_ket = get_sparse_operator(U_OP, n_qubits=n_qubits)@q_ket
+        M_out = new_ket.conj().T @ get_sparse_operator(u_op.Si, n_qubits=n_qubits)@ new_ket
+        print(M_out)
+        print(single_sig_q_ind_and_meas_val[unique_q_index])
+        #  TODO: rotate the state by all U_OPs before measuring! This should fix problem!
+
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0],[1]]) for i in qubit_state])
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        U_OP = 1/np.sqrt(2)*(u_op.Gi + u_op.Si)
+        q_ket = get_sparse_operator(U_OP, n_qubits=n_qubits)@q_ket
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        M_out = q_ket.conj().T @ get_sparse_operator(u_op.Si, n_qubits=n_qubits)@ q_ket
+        M_out = M_out[0][0].real
+        if M_out>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = +1
+
+        print(single_sig_q_ind_and_meas_val[unique_q_index])
+        print(M_out)
+        #  TODO: rotate the state by all U_OPs before measuring! This should fix problem!
+
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+
+    qubit_state_Z_mesaure = -1 * ((2 * qubit_state) - 1)  # plus and minus one for Z measurement
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        Z_ops, coeff = zip(*u_op.Gi.terms.items())
+        Z_qNos, single_q_op_Paulis = zip(*Z_ops[0])
+
+        # TODO: check why -1 sign needed
+        z_sign = np.prod(np.take(qubit_state_Z_mesaure, Z_qNos))
+        single_sig_q_ind_and_meas_val[unique_q_index] = z_sign
+
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+    if sparse_H_full.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H_full.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H_full, k=1, which='SA')
+
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        stabilizer_eigenvalue = ((min_eigvec_full.conj().T @ op_measure @ min_eigvec_full)[0][0]).real
+        print(stabilizer_eigenvalue)
+        if stabilizer_eigenvalue>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    # q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    binary_state = ''.join(map(str, list(qubit_state.astype(int))))
+    int_state = int(binary_state, 2)
+    q_ket = np.eye(2 ** n_qubits)[:, int_state]
+    q_ket = q_ket.reshape([2 ** n_qubits, 1])
+
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations[::-1]):
+        U_OP = 1/np.sqrt(2)*(u_op.Gi + u_op.Si)
+        q_ket = get_sparse_operator(U_OP, n_qubits=n_qubits) @ q_ket
+
+    qubit_state_Z_mesaure = -1 * ((2 * qubit_state) - 1)  # plus and minus one for Z measurement
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        #
+        # Z_ops, coeff = zip(*u_op.Gi.terms.items())
+        # Z_qNos, single_q_op_Paulis = zip(*Z_ops[0])
+        # z_sign = np.prod(np.take(qubit_state_Z_mesaure, Z_qNos))
+        # Z measurement on unique qubit index
+        # single_sig_q_ind_and_meas_val[unique_q_index] = z_sign
+        M_out = (q_ket.conj().T @ get_sparse_operator(u_op.Si, n_qubits=n_qubits)@ q_ket)[0][0].real
+        print(M_out)
+        if M_out<0:
+            single_sig_q_ind_and_meas_val[unique_q_index] =-1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = +1
+        #  TODO: rotate the state by all U_OPs before measuring! This should fix problem!
+
+    print(single_sig_q_ind_and_meas_val)
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    single_s_symmetry_generator_qubit_indices = set()
+    single_sig_q_ind_and_meas_val = {}
+    q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations[::-1]):
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        output = ((q_ket.conj().T @ op_measure @ q_ket)[0][0]).real
+
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        single_sig_q_ind_and_meas_val[unique_q_index] = output
+
+        print(u_op)
+
+
+    return single_sig_q_ind_and_meas_val
+# {0: 1, 1: -1, 6: 1}
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    # q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    binary_state = ''.join(map(str, list(qubit_state.astype(int))))
+    int_state = int(binary_state, 2)
+    q_ket = np.eye(2 ** n_qubits)[:, int_state]
+    q_ket = q_ket.reshape([2 ** n_qubits, 1])
+
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        #
+        # Z_ops, coeff = zip(*u_op.Gi.terms.items())
+        # Z_qNos, single_q_op_Paulis = zip(*Z_ops[0])
+        # z_sign = np.prod(np.take(qubit_state_Z_mesaure, Z_qNos))
+        # Z measurement on unique qubit index
+        # single_sig_q_ind_and_meas_val[unique_q_index] = z_sign
+        M_out = (q_ket.conj().T @ get_sparse_operator(u_op.Gi, n_qubits=n_qubits)@ q_ket)[0][0].real
+
+        print(u_op.Gi, qubit_state)
+        print(M_out)
+        print()
+        if M_out<0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = +1
+        #  TODO: rotate the state by all U_OPs before measuring! This should fix problem!
+
+    print(single_sig_q_ind_and_meas_val)
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(sorted(qubit_inds_kept), range(len(qubit_inds_kept))))
+
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+# nelectron = 10
+# H = H_test_water
+
+# nelectron = 2
+# H = H_test_hydro
+#
+# n_qubits = count_qubits(H)
+# JW_state = np.zeros(n_qubits)
+# JW_state[:nelectron] = np.ones(nelectron)
+#
+# get_ground_tapered_H_by_qubit_state(H, JW_state,
+#                                         check_tapering=True)
+#
+# # get_ground_tapered_H_analytic(H,check_tapering=True)
+
+# {0: -1, 1: 1, 6: 1} water!
+
+# {0: 1, 1: 1, 2: -1} hydrogen
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    single_s_symmetry_generator_qubit_indices = set()
+    single_sig_q_ind_and_meas_val = {}
+    q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations[::-1]):
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        output = ((q_ket.conj().T @ op_measure @ q_ket)[0][0]).real
+
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        single_sig_q_ind_and_meas_val[unique_q_index] = output
+
+        print(u_op)
+
+        # single_q_op, coeff = zip(*u_op.Gi.terms.items())
+        # single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        # print(np.take(qubit_state, single_q_op_qNos))
+
+
+
+    return single_sig_q_ind_and_meas_val
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    q_ket = reduce(np.kron, [np.array([[1], [0]]) if i == 0 else np.array([[0], [1]]) for i in qubit_state])
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+
+        rot_op_symbolic = 1/np.sqrt(2) * (u_op.Gi+u_op.Si)
+        rot_op_mat = get_sparse_operator(rot_op_symbolic, n_qubits=n_qubits)
+
+        q_ket = rot_op_mat @ q_ket
+
+
+    single_s_symmetry_generator_qubit_indices = set()
+    single_sig_q_ind_and_meas_val = {}
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        op_measure = get_sparse_operator(u_op.Si, n_qubits=n_qubits)
+        output = ((q_ket.conj().T @ op_measure @ q_ket)[0][0]).real
+
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        single_sig_q_ind_and_meas_val[unique_q_index] = output
+
+        print(u_op)
+
+
+    return single_sig_q_ind_and_meas_val
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                     check_tapering: bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    sparse_H_rot = get_sparse_operator(pauli_hamiltonian)
+    if sparse_H_rot.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H_rot.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H_rot, k=1, which='SA')
+
+    max_state = min_eigvec_full.argmax()
+    print(max_state)
+
+    q_ket = np.eye(2**n_qubits)[:,max_state]
+    q_ket = q_ket.reshape([2**n_qubits,1])
+
+    single_s_symmetry_generator_qubit_indices = set()
+    single_sig_q_ind_and_meas_val = {}
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations[::-1]):
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        output = ((q_ket.conj().T @ op_measure @ q_ket)[0][0]).real
+
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        single_sig_q_ind_and_meas_val[unique_q_index] = output
+
+        print(u_op)
+
+        # single_q_op, coeff = zip(*u_op.Gi.terms.items())
+        # single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        # print(np.take(qubit_state, single_q_op_qNos))
+
+    return single_sig_q_ind_and_meas_val
+
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    single_s_symmetry_generator_qubit_indices = set()
+    single_sig_q_ind_and_meas_val = {}
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+    m_dict = dict(zip(sorted(single_s_symmetry_generator_qubit_indices), np.zeros(len(single_s_symmetry_generator_qubit_indices))))
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            print(list(h_op.terms.values())[0])
+            continue
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+
+                for unique_q in single_s_symmetry_generator_qubit_indices:
+                    if unique_q in qNos:
+                        print(Pauliword, unique_q)
+                        m_dict[unique_q] +=coeff
+
+
+    print(m_dict)
+
+
+
+
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    H_Z_ops_only = QubitOperator()
+    for h_op in pauli_hamiltonian:
+        if not list(h_op.terms.keys())[0]:
+            continue
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+                if ''.join(('Z' for _ in range(len(qNos)))) == ''.join(paulis):
+                    H_Z_ops_only+=h_op
+
+
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+    m_dict = dict(zip(sorted(single_s_symmetry_generator_qubit_indices), np.zeros(len(single_s_symmetry_generator_qubit_indices))))
+    for h_op in H_Z_ops_only:
+        for Pauliword, coeff in h_op.terms.items():
+            qNos, paulis = zip(*Pauliword)
+
+            for unique_q in single_s_symmetry_generator_qubit_indices:
+                if unique_q in qNos:
+                    print(Pauliword, unique_q)
+                    m_dict[unique_q] +=coeff
+    print(m_dict)
+
+
+
+
+def get_ground_tapered_H_analytic(pauli_hamiltonian: QubitOperator,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator that has been rotated according to symmetry operators
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+
+    H_X_ops_only = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_X_ops_only+=h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+                if ''.join(('X' for _ in range(len(qNos)))) == ''.join(paulis):
+                    H_X_ops_only+=h_op
+
+
+    sparse_H_rot = get_sparse_operator(H_X_ops_only)
+    if sparse_H_rot.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H_rot.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H_rot, k=1, which='SA')
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        op_measure = get_sparse_operator(u_op.Si, n_qubits=n_qubits)
+        stabilizer_eigenvalue = ((min_eigvec_full.conj().T @ op_measure @ min_eigvec_full)[0][0]).real
+        if stabilizer_eigenvalue>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+
+    print(single_sig_q_ind_and_meas_val)
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(sorted(qubit_inds_kept), range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
+
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    H_X_ops_only = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            continue
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+                if ''.join(('X' for _ in range(len(qNos)))) == ''.join(paulis):
+                    H_X_ops_only+=h_op
+
+
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+    m_dict = dict(zip(sorted(single_s_symmetry_generator_qubit_indices), np.zeros(len(single_s_symmetry_generator_qubit_indices))))
+    for h_op in H_X_ops_only:
+        for Pauliword, coeff in h_op.terms.items():
+            qNos, paulis = zip(*Pauliword)
+
+            for unique_q in single_s_symmetry_generator_qubit_indices:
+                if unique_q in qNos:
+                    print(Pauliword, unique_q)
+                    m_dict[unique_q] +=coeff
+            # for unique_q in single_s_symmetry_generator_qubit_indices:
+            #     if unique_q in qNos:
+            #         print(Pauliword, unique_q)
+            #         m_dict[unique_q] +=coeff
+    print(m_dict)
+
+
+
+
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+    H_Z_ops_only = QubitOperator()
+    for h_op in pauli_hamiltonian:
+        if not list(h_op.terms.keys())[0]:
+            H_Z_ops_only+=h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+                if ''.join(('Z' for _ in range(len(qNos)))) == ''.join(paulis):
+                    H_Z_ops_only+=h_op
+
+    # get eigvec of Z only op
+    sparse_H = get_sparse_operator(H_Z_ops_only)
+    if sparse_H.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H, k=1, which='SA')
+
+
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        stabilizer_eigenvalue = ((min_eigvec_full.conj().T @ op_measure @ min_eigvec_full)[0][0]).real
+        print(stabilizer_eigenvalue)
+        if stabilizer_eigenvalue>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+
+    print(single_sig_q_ind_and_meas_val)
+
+
+
+
+def measure_on_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Gi.terms.items())
+        qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        single_s_symmetry_generator_qubit_indices.update(set(qNos))
+
+
+    H_Z_ops_only = QubitOperator()
+    for h_op in pauli_hamiltonian:
+        if not list(h_op.terms.keys())[0]:
+            H_Z_ops_only+=h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                qNos, paulis = zip(*Pauliword)
+                print(set(qNos))
+                if ''.join(('Z' for _ in range(len(qNos)))) == ''.join(paulis):
+                    if len(single_s_symmetry_generator_qubit_indices.difference(set(qNos)))==0:
+                        H_Z_ops_only+=h_op
+
+    print(H_Z_ops_only)
+    # get eigvec of Z only op
+    sparse_H = get_sparse_operator(H_Z_ops_only)
+    if sparse_H.shape[0] < 128:
+        eigenValues, eigenVectors = np.linalg.eigh(sparse_H.todense())
+        idx = eigenValues.argsort()
+        eigvals = eigenValues[idx]
+        eigvecs = eigenVectors[:, idx]
+        min_eigval_full = eigvals[0]
+        min_eigvec_full = eigvecs[:, 0]
+    else:
+        min_eigval_full, min_eigvec_full = eigsh(sparse_H, k=1, which='SA')
+
+
+
+
+        op_measure = get_sparse_operator(u_op.Gi, n_qubits=n_qubits)
+        stabilizer_eigenvalue = ((min_eigvec_full.conj().T @ op_measure @ min_eigvec_full)[0][0]).real
+        print(stabilizer_eigenvalue)
+        if stabilizer_eigenvalue>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] = 1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = -1
+
+    print(single_sig_q_ind_and_meas_val)
+
+
+
+
+def get_ground_tapered_H_by_qubit_state(pauli_hamiltonian: QubitOperator, qubit_state: np.array,
+                                        check_tapering:bool = False) -> QubitOperator:
+    """
+    Function that returns ground state tapered Hamiltonian
+
+    NOTE this is an EXPENSIVE implementation, as diagonlizes the full H to find the corrector sector
+    for the tapered H
+
+    Args:
+        pauli_hamiltonian (QubitOperator): QubitOperator Hamiltonian of full problem
+        qubit_state (np.array): ket in computational basis representing qubit state used to define sector (note
+                                   symmetry generators are measured on this state to define fixed eigenvalues)
+                                   ** IMPORTANT qubit state is indexed left to right! **
+
+        check_tapering (bool): optional flag to check ground state of tapered H with original H (performs sparse
+                                diagonalization - can be expensive!)
+    Returns:
+        H_tapered (QubitOperator): ground state tapered Hamiltonian
+    """
+    H_rotated, U_clifford_rotations = get_rotated_operator_and_generators(pauli_hamiltonian)
+    n_qubits = count_qubits(H_rotated)
+
+
+    qubit_state_Z_mesaure = -1 * ((2 * qubit_state) - 1)  # plus and minus one for Z measurement
+    single_sig_q_ind_and_meas_val = {}
+    single_s_symmetry_generator_qubit_indices = set()
+    for sym_op_ind, u_op in enumerate(U_clifford_rotations):
+        single_q_op, coeff = zip(*u_op.Si.terms.items())
+        single_q_op_qNos, single_q_op_Paulis = zip(*single_q_op[0])
+        unique_q_index = single_q_op_qNos[0]
+        single_s_symmetry_generator_qubit_indices.add(unique_q_index)
+        #
+        Z_ops, coeff = zip(*u_op.Gi.terms.items())
+        Z_qNos, single_q_op_Paulis = zip(*Z_ops[0])
+        z_sign = np.prod(np.take(qubit_state_Z_mesaure, Z_qNos))
+        if z_sign>0:
+            single_sig_q_ind_and_meas_val[unique_q_index] =-1
+        else:
+            single_sig_q_ind_and_meas_val[unique_q_index] = +1
+        #  TODO: rotate the state by all U_OPs before measuring! This should fix problem!
+
+    print(single_sig_q_ind_and_meas_val)
+    # build dictionary to map qubits to new indices
+    qubit_inds_kept = set(range(n_qubits)).difference(single_s_symmetry_generator_qubit_indices)
+    qubit_relabel = dict(zip(qubit_inds_kept, range(len(qubit_inds_kept))))
+
+    H_reduced = QubitOperator()
+    for h_op in H_rotated:
+        if not list(h_op.terms.keys())[0]:
+            H_reduced += h_op
+        else:
+            for Pauliword, coeff in h_op.terms.items():
+                new_coeff = coeff
+                qNos, paulis = zip(*Pauliword)
+                for qNo in set(qNos).intersection(single_s_symmetry_generator_qubit_indices):
+                    new_coeff = new_coeff*single_sig_q_ind_and_meas_val[qNo]
+
+            qNos_reduced = set(qNos).difference(single_s_symmetry_generator_qubit_indices)
+            Pauliword_reduced = ' '.join([f'{Pauli}{qubit_relabel[qNo]}'for qNo, Pauli in zip(qNos, paulis)
+                                          if qNo in qNos_reduced])
+            H_reduced += QubitOperator(Pauliword_reduced, new_coeff)
+
+    if check_tapering:
+        # get tapered gs energy
+        sparse_H_tap = get_sparse_operator(H_reduced)
+        if sparse_H_tap.shape[0] < 128:
+            eigenValues_tap, eigenVectors_tap = np.linalg.eigh(sparse_H_tap.todense())
+            min_eigval_tap = min(eigenValues_tap)
+        else:
+            min_eigval_tap = eigsh(sparse_H_tap, k=1, which='SA')[0][0]
+        del sparse_H_tap
+
+        # get full problem gs energy
+        sparse_H_full = get_sparse_operator(pauli_hamiltonian)
+        if sparse_H_full.shape[0] < 128:
+            eigenValues_full, eigenVectors_full = np.linalg.eigh(sparse_H_full.todense())
+            min_eigval_full = min(eigenValues_full)
+        else:
+            min_eigval_full = eigsh(sparse_H_full, k=1, which='SA')[0][0]
+        del sparse_H_full
+
+        if not np.isclose(min_eigval_tap, min_eigval_full):
+            raise ValueError('wrong sector found')
+
+    return H_reduced
