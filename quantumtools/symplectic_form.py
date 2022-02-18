@@ -328,7 +328,8 @@ class PauliwordOp:
             Pword: "PauliwordOp", 
             angle:float=None
         ) -> "PauliwordOp":
-        """
+        """ TODO should ignore any coefficients specified in Pword!
+        Else this type of rotation is not well-defined 
         """
         assert(Pword.n_terms==1), 'Only rotation by single Pauliword allowed here'
         commute_vec = self.commutes_termwise(Pword).flatten()
@@ -362,7 +363,7 @@ class PauliwordOp:
         This operation is Clifford when t=pi/2, since cos(pi/2) P - sin(pi/2) iPQ = -iPQ.
         For t!=pi/2 an increase in the number of terms can be observed (non-Clifford unitary).
         """
-        assert(np.all(Pword.adjacency_matrix)), 'Not all terms commute within Pword - cannot perform rotation'
+        #assert(np.all(Pword.adjacency_matrix)), 'Not all terms commute within Pword - cannot perform rotation'
         if angles is None:
             angles = [None for t in range(Pword.n_terms)]
         P_rotating = self.copy()
