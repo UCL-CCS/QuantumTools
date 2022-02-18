@@ -93,25 +93,19 @@ def symplectic_to_sparse_matrix(symp_vec, coeff) -> csr_matrix:
 
 class PauliwordOp:
     """ 
-    Class to represent an operator defined over the Pauli group 
-    in the symplectic form. The internal symplectic matrix is stored
-    in the compressed sparse column (CSC) form to enable fast matrix 
-    operations.
+    A class thats represents an operator defined over the Pauli group in the symplectic form.
     """
     def __init__(self, 
             operator:   Union[List[str], Dict[str, float], np.array], 
             coeff_list: Union[List[complex], np.array] = None
         ) -> None:
         """ 
-        When the class is first initialized it is easiest to provide
-        the operator stored as a dictionary where keys are strings representing
-        Pauli operators and values coefficients. The operator may also be given
-        as a string or list of strings, in which case the coefficients will be 
-        set to 1. However, in the interest of efficiency, whenever a method creates
-        a new QubitOp instance it will instead specify the operator in the sparse
-        form, with a vector of coefficients stored as an array. This way we are
-        not constantly convertng back and forth between the dictionary and 
-        symplectic represenations.
+        PauliwordOp may be initialized from either a dictionary in the form {pauli:coeff, ...}, 
+        a list of Pauli strings or in the symplectic representation. In the latter two cases a 
+        supplementary list of coefficients is also required, whereas this is inherent within the 
+        dictionary representation. Operating on the level of the symplectic matrix is fastest 
+        since it circumvents various conversions required - this is how the methods defined 
+        below function.
         """
 
         if isinstance(operator, np.ndarray):
@@ -137,7 +131,9 @@ class PauliwordOp:
         self.Z_block = self.symp_matrix[:, self.n_qubits:]
         
 
-    def _init_from_paulistring_list(self, operator_list: List[str]) -> None:
+    def _init_from_paulistring_list(self, 
+            operator_list: List[str]
+        ) -> None:
         """
         """
         n_rows = len(operator_list)
@@ -195,7 +191,9 @@ class PauliwordOp:
         Y_coords = np.bitwise_and(self.X_block, self.Z_block)
         return np.array(Y_coords.sum(axis=1))
 
-    def _multiply_single_Pword_phaseless(self,Pword:"PauliwordOp") -> np.array:
+    def _multiply_single_Pword_phaseless(self,
+            Pword:"PauliwordOp"
+        ) -> np.array:
         """ performs *phaseless* Pauli multiplication via binary summation 
         of the symplectic matrix. Phase requires additional operations that
         are computed in _multiply_single_Pword.
@@ -203,7 +201,9 @@ class PauliwordOp:
         pauli_mult_phaseless = np.bitwise_xor(self.symp_matrix, Pword.symp_matrix)
         return PauliwordOp(pauli_mult_phaseless, np.ones(self.n_terms))
     
-    def _multiply_single_Pword(self, Pword:"PauliwordOp") -> "PauliwordOp":
+    def _multiply_single_Pword(self, 
+            Pword:"PauliwordOp"
+        ) -> "PauliwordOp":
         """ performs Pauli multiplication with phases. The phase compensation 
         is implemented as per https://doi.org/10.1103/PhysRevA.68.042318
         """
@@ -252,7 +252,9 @@ class PauliwordOp:
         mask_non_zero = np.where(simplified_coeff!=0)
         return PauliwordOp(simplified_terms[mask_non_zero], simplified_coeff[mask_non_zero])
 
-    def __add__(self, Pword: "PauliwordOp") -> "PauliwordOp":
+    def __add__(self, 
+            Pword: "PauliwordOp"
+        ) -> "PauliwordOp":
         """ Add to this PauliwordOp another PauliwordOp by stacking the
         respective symplectic matrices and cleaning any resulting duplicates
         """
@@ -263,7 +265,9 @@ class PauliwordOp:
         # cleanup run to remove duplicate rows (Pauliwords)
         return PauliwordOp(P_symp_mat_new, P_new_coeffs).cleanup()
 
-    def __mul__(self, Pword: "PauliwordOp") -> "PauliwordOp":
+    def __mul__(self, 
+            Pword: "PauliwordOp"
+        ) -> "PauliwordOp":
         """ Right-multiplication of this PauliwordOp by another PauliwordOp.
         The phaseless multiplication is achieved via binary summation of the
         symplectic matrix in _multiply_single_Pword_phaseless whilst the phase
@@ -279,10 +283,17 @@ class PauliwordOp:
         P_final = reduce(lambda x,y: x+y, P_updated_list)
         return P_final
 
-    def multiply_by_constant(self, const):
+    def multiply_by_constant(self, 
+            const: complex
+        ) -> "PauliwordOp":
+        """
+        Multiply the PauliwordOp by a complex coefficient
+        """
         return PauliwordOp(self.symp_matrix, self.coeff_vec*const)
 
-    def commutes_termwise(self, Pword: "PauliwordOp") -> np.array:
+    def commutes_termwise(self, 
+            Pword: "PauliwordOp"
+        ) -> np.array:
         """ Outputs an array in which rows correspond with terms of the internal PauliwordOp (self)
         and colummns of Pword - True where terms commute and False if anticommutes
 
@@ -299,7 +310,9 @@ class PauliwordOp:
         Omega_Pword_symp = np.hstack((Pword.Z_block,  Pword.X_block)).T
         return (self.symp_matrix @ Omega_Pword_symp) % 2 == 0
 
-    def commutes(self, Pword: "PauliwordOp") -> bool:
+    def commutes(self, 
+            Pword: "PauliwordOp"
+        ) -> bool:
         """ Checks if every term of self commutes with every term of Pword
         """
         return np.all(self.commutes_termwise(Pword))
@@ -310,7 +323,10 @@ class PauliwordOp:
         """
         return self.commutes_termwise(self)
 
-    def _rotate_by_single_Pword(self, Pword: "PauliwordOp", angle:float=None) -> "PauliwordOp":
+    def _rotate_by_single_Pword(self, 
+            Pword: "PauliwordOp", 
+            angle:float=None
+        ) -> "PauliwordOp":
         """
         """
         assert(Pword.n_terms==1), 'Only rotation by single Pauliword allowed here'
@@ -326,14 +342,18 @@ class PauliwordOp:
 
         if angle is None:
             # assumes pi/2 rotation so Clifford
-            return commute_self + (anticom_self*Pword).multiply_by_constant(-1j)
+            anticom_part = (anticom_self*Pword).multiply_by_constant(-1j)
         else:
             # if angle is specified, performs non-Clifford rotation
             anticom_part = (anticom_self.multiply_by_constant(np.cos(angle)) + 
                             (anticom_self*Pword).multiply_by_constant(-1j*np.sin(angle)))
-            return commute_self + anticom_part
+        
+        return commute_self + anticom_part
 
-    def rotate_by_Pword(self, Pword: "PauliwordOp", angles: None) -> "PauliwordOp":
+    def rotate_by_Pword(self, 
+            Pword: "PauliwordOp", 
+            angles: List[float] = None
+        ) -> "PauliwordOp":
         """ Let R(t) = e^{i t/2 Q} = cos(t/2)*I + i*sin(t/2)*Q, then one of the following can occur:
         R(t) P R^\dag(t) = P when [P,Q] = 0
         R(t) P R^\dag(t) = cos(t) P + sin(t) (-iPQ) when {P,Q} = 0
@@ -350,7 +370,7 @@ class PauliwordOp:
             P_rotating = P_rotating._rotate_by_single_Pword(Pword_temp, angle).cleanup()
         return P_rotating
 
-    def PauliwordOp_to_OF(self):
+    def PauliwordOp_to_OF(self) -> List[QubitOperator]:
         """ TODO Interface with converter.py (replace with to_dictionary method)
         """
         OF_list = []
@@ -361,7 +381,7 @@ class PauliwordOp:
         return OF_list
 
     @cached_property
-    def to_matrix(self):
+    def to_matrix(self) -> csr_matrix:
         """
         Function to get (2**n, 2**n) matrix of operator acting in Hilbert space
 
