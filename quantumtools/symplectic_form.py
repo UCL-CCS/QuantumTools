@@ -1,5 +1,4 @@
-from functools import reduce
-from cached_property import cached_property
+from functools import reduce, cached_property
 from openfermion import QubitOperator
 import numpy as np
 from copy import deepcopy
@@ -39,7 +38,7 @@ def symplectic_to_string(symp_vec) -> str:
 
 def count1_in_int_bitstring(i):
     """
-    Count number of "1" bits in integar i to be thought of in binary representation
+    Count number of "1" bits in integer i to be thought of in binary representation
 
     https://stackoverflow.com/questions/109023/how-to-count-the-number-of-set-bits-in-a-32-bit-integer#109025
     https://web.archive.org/web/20151229003112/http://blogs.msdn.com/b/jeuge/archive/2005/06/08/hakmem-bit-count.aspx
