@@ -81,7 +81,7 @@ def symplectic_to_sparse_matrix(symp_vec, coeff) -> csr_matrix:
     col_ind = np.bitwise_xor(row_ind, x_int)
 
     row_inds_and_Zint = np.bitwise_and(row_ind, z_int)
-    vals = global_phase * (-1) ** count1_in_int_bitstring(row_inds_and_Zint)
+    vals = global_phase * (-1) ** count1_in_int_bitstring(row_inds_and_Zint)%2
 
     sparse_matrix = csr_matrix(
         (vals, (row_ind, col_ind)),
