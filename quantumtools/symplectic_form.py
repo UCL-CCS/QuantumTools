@@ -1,4 +1,5 @@
-from functools import reduce, cached_property
+from functools import reduce
+from cached_property import cached_property
 from openfermion import QubitOperator
 import numpy as np
 from copy import deepcopy
@@ -80,7 +81,7 @@ def symplectic_to_sparse_matrix(symp_vec, coeff) -> csr_matrix:
     col_ind = np.bitwise_xor(row_ind, x_int)
 
     row_inds_and_Zint = np.bitwise_and(row_ind, z_int)
-    vals = global_phase * (-1) ** count1_in_int_bitstring(row_inds_and_Zint)
+    vals = global_phase * (-1) ** count1_in_int_bitstring(row_inds_and_Zint)%2
 
     sparse_matrix = csr_matrix(
         (vals, (row_ind, col_ind)),
@@ -381,7 +382,7 @@ class PauliwordOp:
         return OF_list
 
     @cached_property
-    def to_matrix(self) -> csr_matrix:
+    def to_sparse_matrix(self) -> csr_matrix:
         """
         Function to get (2**n, 2**n) matrix of operator acting in Hilbert space
 
