@@ -100,7 +100,7 @@ class PauliwordOp:
     """
     def __init__(self, 
             operator:   Union[List[str], Dict[str, float], np.array], 
-            coeff_list: List[complex] = None
+            coeff_list: Union[List[complex], np.array] = None
         ) -> None:
         """ 
         When the class is first initialized it is easiest to provide
@@ -128,10 +128,10 @@ class PauliwordOp:
             else:
                 raise ValueError(f'unkown operator type: must be dict or np.array: {type(operator)}')
         
+        assert(coeff_list is not None), 'A list of coefficients has not been supplied'
         self.coeff_vec = np.asarray(coeff_list, dtype=complex)
         self.n_terms = self.symp_matrix.shape[0]
         assert(self.n_terms==len(self.coeff_vec)), 'coeff list and Pauliwords not same length'
-
         assert(set(np.unique(self.symp_matrix)).issubset({0,1})), 'symplectic array not defined with 0 and 1 only'
         self.X_block = self.symp_matrix[:, :self.n_qubits]
         self.Z_block = self.symp_matrix[:, self.n_qubits:]
