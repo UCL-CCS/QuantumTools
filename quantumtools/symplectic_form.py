@@ -1,4 +1,5 @@
-from functools import reduce, cached_property
+from functools import reduce
+from cached_property import cached_property
 from openfermion import QubitOperator
 import numpy as np
 from copy import deepcopy
