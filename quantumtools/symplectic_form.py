@@ -41,9 +41,9 @@ def symplectic_to_string(symp_vec) -> str:
 #         self.paulis = paulis
 #         self._valid_pauliword()
 #         self.coeffs = coeffsop_list = ['IZXY', 'YYXX']
-coeff = [-1,1j]
-op1 = Pauliword(op_list, coeff)
-op2 =  Pauliword(op1.symp_matrix, coeff)
+#coeff = [-1,1j]
+#op1 = Pauliword(op_list, coeff)
+#op2 =  Pauliword(op1.symp_matrix, coeff)
 
 
 #         self._init_symplectic()
@@ -171,8 +171,9 @@ class Pauliword:
     operations.
     """
     def __init__(self, 
-            operator: Union[List[str], np.array], coeff_list: List[complex]
-        ):
+            operator:   Union[List[str], np.array], 
+            coeff_list: List[complex]
+        ) -> None:
         """ When the class is first initialized it is easiest to provide
         the operator stored as a dictionary where keys are strings representing
         Pauli operators and values coefficients. The operator may also be given
@@ -202,7 +203,7 @@ class Pauliword:
         self.X_block = self.symp_matrix[:, :self.n_qubits]
         self.Z_block = self.symp_matrix[:, self.n_qubits:]
 
-    def _init_from_paulistring_list(self, operator_list):
+    def _init_from_paulistring_list(self, operator_list: List[str]) -> None:
         n_rows = len(operator_list)
         self.n_qubits = len(operator_list[0])
 
@@ -223,6 +224,9 @@ class Pauliword:
             self.symp_matrix[row_ind,self.n_qubits:] += Y_loc
 
     def __str__(self) -> str:
+        """ Defines the print behaviour of Pauliword - 
+        returns the operator in an easily readable format
+        """
         out_string = ''
         for pauli_vec, ceoff in zip(self.symp_matrix, self.coeff_vec):
             p_string = symplectic_to_string(pauli_vec)
@@ -247,23 +251,24 @@ class Pauliword:
         Y_coords = np.bitwise_and(self.X_block, self.Z_block)
         return np.array(Y_coords.sum(axis=1))
 
-    def _multiply_single_Pword_phaseless(self,Pword) -> np.array:
+    def _multiply_single_Pword_phaseless(self,Pword:"Pauliword") -> np.array:
         """ performs *phaseless* Pauli multiplication via binary summation 
         of the symplectic matrix. Phase requires additional operations that
-        are computed in phase_modification.
+        are computed in _multiply_single_Pword.
         """
         pauli_mult_phaseless = np.bitwise_xor(self.symp_matrix, Pword.symp_matrix)
         return Pauliword(pauli_mult_phaseless, np.ones(pauli_mult_phaseless.shape[0]))
     
-    def _multiply_single_Pword(self, Pword):
-        
-        signless_prod_Pword = self._multiply_single_Pword_phaseless(Pword)
+    def _multiply_single_Pword(self, Pword:"Pauliword") -> "Pauliword":
+        """ performs Pauli multiplication with phases. The phase compensation 
+        is implemented as per https://doi.org/10.1103/PhysRevA.68.042318
+        """
+        phaseless_prod_Pword = self._multiply_single_Pword_phaseless(Pword)
 
-        # counts ZX mismatches
+        # counts ZX mismatches for sign flip
         assert(Pword.Z_block.shape[0]==1), 'not single Pauliword'
         num_sign_flips = np.sum(np.bitwise_and(self.X_block, Pword.Z_block),
                                axis=1)
-
         sign_change = (-1) ** num_sign_flips
 
         # mapping from sigma to tau representation
@@ -271,26 +276,26 @@ class Pauliword:
         sigma_tau_compensation = (-1j) ** full_Y_count
 
         # back from tau to sigma (note uses output Pword)
-        tau_sigma_compensation = (1j) ** signless_prod_Pword.Y_count
+        tau_sigma_compensation = (1j) ** phaseless_prod_Pword.Y_count
 
+        # the full phase modification
         phase_mod = sign_change * sigma_tau_compensation * tau_sigma_compensation
-
         new_coeff_vec = phase_mod * self.coeff_vec * Pword.coeff_vec
 
-        P_out = Pauliword(signless_prod_Pword.symp_matrix, new_coeff_vec)
-        return P_out
+        return Pauliword(phaseless_prod_Pword.symp_matrix, new_coeff_vec)
 
-    def cleanup(self):
+    def cleanup(self) -> "Pauliword":
+        """ Remove duplicated rows of symplectic matrix terms, whilst summing 
+        the corresponding coefficients of the deleted rows in coeff
+        """ 
         # order lexicographically and take difference between adjacent rows
         term_ordering = np.lexsort(self.symp_matrix.T)
         diff_adjacent = np.diff(self.symp_matrix[term_ordering], axis=0)
         # the unique terms are those which are non-zero
         mask_unique_terms = np.append(True, ~np.all(diff_adjacent==0, axis=1))
-
         # determine the inverse mapping that combines duplicate terms
         inverse_index = np.zeros_like(term_ordering)
         inverse_index[term_ordering] = np.cumsum(mask_unique_terms) - 1
-        
         # drop duplicate terms
         simplified_terms = self.symp_matrix[term_ordering][mask_unique_terms]
         # sum over the coefficients of duplicated terms
@@ -298,23 +303,28 @@ class Pauliword:
         weights = self.coeff_vec
         cf_real = np.bincount(inverse_index, weights = weights.real)
         cf_imag = np.bincount(inverse_index, weights = weights.imag)
-        # print(cf_real, np.array(cf_imag)*1j)
         simplified_coeff = cf_real+cf_imag*1j
-        return Pauliword(simplified_terms, simplified_coeff)
+        # index non-zero elements in the coefficient vector
+        mask_non_zero = np.where(simplified_coeff!=0)
+        return Pauliword(simplified_terms[mask_non_zero], simplified_coeff[mask_non_zero])
 
-    def __add__(self, Pword):
-
+    def __add__(self, Pword: "Pauliword") -> "Pauliword":
+        """ Add to this Pauliword another Pauliword by stacking the
+        respective symplectic matrices and cleaning any resulting duplicates
+        """
         P_symp_mat_new = np.vstack((self.symp_matrix, Pword.symp_matrix))
         P_new_coeffs = np.hstack((self.coeff_vec, Pword.coeff_vec)) 
 
         # cleanup run to remove duplicate rows (Pauliwords)
-        P_new = Pauliword(P_symp_mat_new, P_new_coeffs).cleanup()
-        
-        return P_new
+        return Pauliword(P_symp_mat_new, P_new_coeffs).cleanup()
 
 
-    def __mul__(self, Pword):
-
+    def __mul__(self, Pword: "Pauliword") -> "Pauliword":
+        """ Right-multiplication of this Pauliword by another Pauliword.
+        The phaseless multiplication is achieved via binary summation of the
+        symplectic matrix in _multiply_single_Pword_phaseless whilst the phase
+        compensation is introduced in _multiply_single_Pword.
+        """
         P_updated_list =[]
         for ind in range(Pword.symp_matrix.shape[0]):
             Pvec_single = Pword.symp_matrix[ind]
@@ -330,7 +340,7 @@ class Pauliword:
         P_final = reduce(lambda x,y: x+y, P_updated_list)
         return P_final
 
-    def commutes(self, Pword) -> bool:
+    def commutes(self, Pword: "Pauliword") -> np.array:
         # checks qubit number is same
         # TODO: fix this function!
         assert (self.n_qubits == Pword.n_qubits), 'Pauliwords defined for different number of qubits'
@@ -355,7 +365,7 @@ class Pauliword:
 
     # def symplectic_inner_product(self, 
     #         aux_paulis: Union[str, List[str], Dict[str, float], np.array, "QubitOp"], 
-    #         sip_type = 'full'
+    #         sip_type = 'full'``
     #     ) -> np.array:
     #     """ Method to calculate the symplectic inner product of the represented
     #     operator with one (or more) specified pauli operators, .
