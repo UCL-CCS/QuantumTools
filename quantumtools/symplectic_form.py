@@ -361,7 +361,7 @@ class PauliwordOp:
         return OF_list
 
     @cached_property
-    def to_matrix(self):
+    def to_sparse_matrix(self):
         """
         Function to get (2**n, 2**n) matrix of operator acting in Hilbert space
 
