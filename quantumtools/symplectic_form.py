@@ -43,8 +43,8 @@ class PauliwordOp:
     operations.
     """
     def __init__(self, 
-            operator:   Union[List[str], np.array], 
-            coeff_list: List[complex]
+            operator:   Union[List[str], Dict[str, float], np.array], 
+            coeff_list: List[complex] = None
         ) -> None:
         """ 
         When the class is first initialized it is easiest to provide
@@ -57,19 +57,22 @@ class PauliwordOp:
         not constantly convertng back and forth between the dictionary and 
         symplectic represenations.
         """
-        self.coeff_vec = np.asarray(coeff_list, dtype=complex)
 
-        if isinstance(operator, list):
-            self._init_from_paulistring_list(operator)
-        elif isinstance(operator, np.ndarray):
+        if isinstance(operator, np.ndarray):
             if len(operator.shape)==1:
                 operator = operator.reshape([1, len(operator)])
-
             self.symp_matrix = operator
             self.n_qubits = self.symp_matrix.shape[1]//2
-        else:
-            raise ValueError(f'unkown operator type: must be dict or np.array: {type(operator)}')
+        else:    
+            if isinstance(operator, dict):
+                operator, coeff_list = zip(*operator.items())
+                operator = list(operator)
+            if isinstance(operator, list):
+                self._init_from_paulistring_list(operator)
+            else:
+                raise ValueError(f'unkown operator type: must be dict or np.array: {type(operator)}')
         
+        self.coeff_vec = np.asarray(coeff_list, dtype=complex)
         self.n_terms = self.symp_matrix.shape[0]
         assert(self.n_terms==len(self.coeff_vec)), 'coeff list and Pauliwords not same length'
 
@@ -197,6 +200,7 @@ class PauliwordOp:
         """ Add to this PauliwordOp another PauliwordOp by stacking the
         respective symplectic matrices and cleaning any resulting duplicates
         """
+        assert (self.n_qubits == Pword.n_qubits), 'Pauliwords defined for different number of qubits'
         P_symp_mat_new = np.vstack((self.symp_matrix, Pword.symp_matrix))
         P_new_coeffs = np.hstack((self.coeff_vec, Pword.coeff_vec)) 
 
@@ -209,17 +213,12 @@ class PauliwordOp:
         symplectic matrix in _multiply_single_Pword_phaseless whilst the phase
         compensation is introduced in _multiply_single_Pword.
         """
+        assert (self.n_qubits == Pword.n_qubits), 'Pauliwords defined for different number of qubits'
         P_updated_list =[]
-        for ind in range(Pword.n_terms):
-            Pvec_single = Pword.symp_matrix[ind]
-            coeff_single= Pword.coeff_vec[ind]
+        for Pvec_single,coeff_single in zip(Pword.symp_matrix,Pword.coeff_vec):
             Pword_temp = PauliwordOp(Pvec_single, [coeff_single])
-            # print(Pword_temp)
             P_new = self._multiply_single_Pword(Pword_temp)
             P_updated_list.append(P_new)
-
-        # for op in P_updated_list:
-        #     print(op)
 
         P_final = reduce(lambda x,y: x+y, P_updated_list)
         return P_final
@@ -289,14 +288,10 @@ class PauliwordOp:
         assert(np.all(Pword.adjacency_matrix)), 'Not all terms commute within Pword - cannot perform rotation'
         if angles is None:
             angles = [None for t in range(Pword.n_terms)]
-        
         P_rotating = self.copy()
-        for ind in range(Pword.n_terms):
-            Pvec_single = Pword.symp_matrix[ind]
-            coeff_single= Pword.coeff_vec[ind]
+        for Pvec_single,coeff_single,angle in zip(Pword.symp_matrix,Pword.coeff_vec,angles):
             Pword_temp = PauliwordOp(Pvec_single, [coeff_single])
-            P_rotating = P_rotating._rotate_by_single_Pword(Pword_temp, angle=angles[ind]).cleanup()
-
+            P_rotating = P_rotating._rotate_by_single_Pword(Pword_temp, angle).cleanup()
         return P_rotating
 
     def PauliwordOp_to_OF(self):
