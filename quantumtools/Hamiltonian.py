@@ -1,10 +1,10 @@
 from .symplectic_form import PauliwordOp, symplectic_to_string
 import networkx as nx
-import matplotlib.pyplot as plt
 import numpy as np
 from typing import List, Union, Dict
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 
 class QubitHamiltonian(PauliwordOp):
@@ -74,11 +74,12 @@ class HamiltonianGraph(QubitHamiltonian):
 
         return graph
 
-    def clique_cover(self, clique_relation, colouring_strategy, colour_interchange=False):
+    def clique_cover(self, clique_relation, colouring_strategy, colour_interchange=False,
+                     plot_graph=False):
 
-        if clique_relation == 'C':
+        if clique_relation == 'AC':
             graph = self.build_graph(edge_relation='C')
-        elif clique_relation == 'AC':
+        elif clique_relation == 'C':
             graph = self.build_graph(edge_relation='AC')
         elif clique_relation == 'QWC':
             graph = self.build_graph(edge_relation='QWC')
@@ -107,16 +108,23 @@ class HamiltonianGraph(QubitHamiltonian):
 
             clique_dict[Clique_ind] = clique
 
+        if plot_graph:
+            possilbe_colours = cm.rainbow(np.linspace(0, 1, len(unique_colours)))
+            colour_list = [possilbe_colours[greedy_colouring_output_dic[node_id]] for node_id in graph.nodes()]
+            # print(colour_list)
+            # print([symplectic_to_string(self.symp_matrix[row_ind]) for row_ind in graph.nodes])
+            self.draw_graph(graph, with_node_label=True, node_sizes=True, node_colours=colour_list)
+
         return clique_dict
 
-    def draw_graph(self, graph_input, with_node_label=False, node_sizes=True, ):
+    def draw_graph(self, graph_input, with_node_label=False, node_sizes=True, node_colours=None):
 
         if node_sizes:
             node_sizes = 200 * np.abs(np.round(self.coeff_vec)) + 1
 
         options = {
             'node_size': node_sizes,
-            'node_color': 'b'
+            'node_color': 'b' if node_colours is None else node_colours
                  }
 
         plt.figure()
@@ -142,3 +150,4 @@ class HamiltonianGraph(QubitHamiltonian):
         # plt.savefig('G_raw', dpi=300, transparent=True, )  # edgecolor='black', facecolor='white')
         plt.show()
         return None
+
