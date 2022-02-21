@@ -395,3 +395,35 @@ class PauliwordOp:
             out_matrix += symplectic_to_sparse_matrix(Pvec_single, coeff_single)
 
         return out_matrix
+
+    def qwc_single_Pword(self,
+            Pword: "PauliwordOp"
+        ) -> bool:
+        """ Checks self qubit wise commute (QWC) with another single Pauliword
+        """
+        assert (self.n_terms == 1), 'self operator must be a single Pauliword'
+        assert (Pword.n_terms == 1), 'Pword must be a single Pauliword'
+
+        # NOT identity locations (used for mask)
+        self_I = np.bitwise_or(self.X_block, self.Z_block).astype(bool)
+        Pword_I = np.bitwise_or(Pword.X_block, Pword.Z_block).astype(bool)
+
+        # Get the positions where neither self nor Pword have I acting on them
+        unique_non_I_locations = np.bitwise_and(self_I, Pword_I)
+
+        # check non I operators are the same!
+        same_Xs = np.bitwise_not(
+            np.bitwise_xor(self.X_block[unique_non_I_locations], Pword.X_block[unique_non_I_locations]).astype(
+                bool))
+        same_Zs = np.bitwise_not(
+            np.bitwise_xor(self.Z_block[unique_non_I_locations], Pword.Z_block[unique_non_I_locations]).astype(
+                bool))
+
+        if np.all(same_Xs) and np.all(same_Zs):
+            return True
+        else:
+            return False
+
+VV = PauliwordOp({'ZXY': 1})
+TT = PauliwordOp({'ZXZ':1})
+VV.qwc_single_Pword(TT)
