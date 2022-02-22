@@ -266,6 +266,21 @@ class PauliwordOp:
         # cleanup run to remove duplicate rows (Pauliwords)
         return PauliwordOp(P_symp_mat_new, P_new_coeffs).cleanup()
 
+    def __sub__(self,
+            Pword: "PauliwordOp"
+        ) -> "PauliwordOp":
+        """ Add to this PauliwordOp another PauliwordOp by stacking the
+        respective symplectic matrices and cleaning any resulting duplicates
+        """
+        assert (self.n_qubits == Pword.n_qubits), 'Pauliwords defined for different number of qubits'
+        P_symp_mat_new = np.vstack((self.symp_matrix, Pword.symp_matrix))
+
+        # note -1 * here!
+        P_new_coeffs = np.hstack((self.coeff_vec, -1*Pword.coeff_vec))
+
+        # cleanup run to remove duplicate rows (Pauliwords)
+        return PauliwordOp(P_symp_mat_new, P_new_coeffs).cleanup()
+
     def __mul__(self, 
             Pword: "PauliwordOp"
         ) -> "PauliwordOp":
@@ -424,6 +439,3 @@ class PauliwordOp:
         else:
             return False
 
-VV = PauliwordOp({'ZXY': 1})
-TT = PauliwordOp({'ZXZ':1})
-VV.qwc_single_Pword(TT)

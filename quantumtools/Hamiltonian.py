@@ -8,7 +8,10 @@ import matplotlib.cm as cm
 
 
 class QubitHamiltonian(PauliwordOp):
-    # TODO
+    """
+    Qubit Hamiltonian made up as a linear combination of Pauliwords
+
+    """
     def __init__(self,
             operator: Union[List[str], Dict[str, float], np.array],
             coeff_list=None):
@@ -75,7 +78,7 @@ class HamiltonianGraph(QubitHamiltonian):
         return graph
 
     def clique_cover(self, clique_relation, colouring_strategy, colour_interchange=False,
-                     plot_graph=False):
+                     plot_graph=False, with_node_label=False, node_sizes=True):
 
         if clique_relation == 'AC':
             graph = self.build_graph(edge_relation='C')
@@ -113,7 +116,7 @@ class HamiltonianGraph(QubitHamiltonian):
             colour_list = [possilbe_colours[greedy_colouring_output_dic[node_id]] for node_id in graph.nodes()]
             # print(colour_list)
             # print([symplectic_to_string(self.symp_matrix[row_ind]) for row_ind in graph.nodes])
-            self.draw_graph(graph, with_node_label=True, node_sizes=True, node_colours=colour_list)
+            self.draw_graph(graph, with_node_label=with_node_label, node_sizes=node_sizes, node_colours=colour_list)
 
         return clique_dict
 
@@ -121,14 +124,19 @@ class HamiltonianGraph(QubitHamiltonian):
 
         if node_sizes:
             node_sizes = 200 * np.abs(np.round(self.coeff_vec)) + 1
-
-        options = {
-            'node_size': node_sizes,
-            'node_color': 'b' if node_colours is None else node_colours
-                 }
+            options = {
+                'node_size': node_sizes,
+                'node_color': 'r' if node_colours is None else node_colours
+                     }
+        else:
+            options = {
+                'node_color': 'r' if node_colours is None else node_colours
+                     }
 
         plt.figure()
         pos = nx.circular_layout(graph_input)
+        # # pos = nx.spring_layout(graph_input)
+        # pos = nx.nx_pydot.graphviz_layout(graph_input)
 
         nx.draw_networkx_nodes(graph_input,
                                pos,
@@ -136,7 +144,7 @@ class HamiltonianGraph(QubitHamiltonian):
                                **options)
         nx.draw_networkx_edges(graph_input, pos,
                                width=1.0,
-                               # alpha=0.5
+                               # alpha=0.5,
                                nodelist=list(graph_input.nodes),
                                )
 
