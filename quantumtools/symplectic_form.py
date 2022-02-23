@@ -5,6 +5,8 @@ import numpy as np
 from copy import deepcopy
 from typing import List, Union, Dict
 from scipy.sparse import csr_matrix
+import warnings
+warnings.simplefilter('always', UserWarning)
 
 def symplectic_to_string(symp_vec) -> str:
     """
@@ -36,6 +38,24 @@ def symplectic_to_string(symp_vec) -> str:
 
     return Pword_string
 
+def string_to_symplectic(pauli_str, n_qubits):
+    """
+    """
+    assert(len(pauli_str) == n_qubits), 'Number of qubits is incompatible with pauli string'
+    assert (set(pauli_str).issubset({'I', 'X', 'Y', 'Z'})), 'pauliword must only contain X,Y,Z,I terms'
+
+    char_aray = np.array(list(pauli_str), dtype=str)
+    X_loc = (char_aray == 'X')
+    Z_loc = (char_aray == 'Z')
+    Y_loc = (char_aray == 'Y')
+
+    symp_vec = np.zeros(2*n_qubits, dtype=int)
+    symp_vec[:n_qubits] += X_loc
+    symp_vec[n_qubits:] += Z_loc
+    symp_vec[:n_qubits] += Y_loc
+    symp_vec[n_qubits:] += Y_loc
+
+    return symp_vec
 
 def count1_in_int_bitstring(i):
     """
@@ -114,7 +134,7 @@ class PauliwordOp:
                 operator = operator.reshape([1, len(operator)])
             self.symp_matrix = operator
             self.n_qubits = self.symp_matrix.shape[1]//2
-        else:    
+        else:
             if isinstance(operator, dict):
                 operator, coeff_list = zip(*operator.items())
                 operator = list(operator)
@@ -142,19 +162,8 @@ class PauliwordOp:
 
         self.symp_matrix = np.zeros((n_rows, 2 * self.n_qubits), dtype=int)
         for row_ind, pauli_str in enumerate(operator_list):
-            
-            assert(len(pauli_str)==self.n_qubits), 'operator defined on differing qubit numbers'
-            assert (set(pauli_str).issubset({'I', 'X', 'Y', 'Z'})), 'pauliword must only contain X,Y,Z,I terms'
+            self.symp_matrix[row_ind] = string_to_symplectic(pauli_str, self.n_qubits)
 
-            char_aray = np.array(list(pauli_str), dtype=str)
-            X_loc = (char_aray == 'X')
-            Z_loc = (char_aray == 'Z')
-            Y_loc = (char_aray == 'Y')
-
-            self.symp_matrix[row_ind, :self.n_qubits] += X_loc
-            self.symp_matrix[row_ind,self.n_qubits:] += Z_loc
-            self.symp_matrix[row_ind,:self.n_qubits] += Y_loc
-            self.symp_matrix[row_ind,self.n_qubits:] += Y_loc
 
     def __str__(self) -> str:
         """ 
@@ -229,7 +238,6 @@ class PauliwordOp:
 
         return PauliwordOp(phaseless_prod_Pword.symp_matrix, new_coeff_vec)
 
-
     def cleanup(self) -> "PauliwordOp":
         """ Remove duplicated rows of symplectic matrix terms, whilst summing
         the corresponding coefficients of the deleted rows in coeff
@@ -250,31 +258,6 @@ class PauliwordOp:
         reduced_symplectic_matrix = sorted_symp_matrix[row_summing]
         reduced_coeff_vec = np.add.reduceat(sorted_coeff_vec, row_summing, axis=0)
         return PauliwordOp(reduced_symplectic_matrix, reduced_coeff_vec)
-
-
-    def cleanup_old(self) -> "PauliwordOp":
-        """ Remove duplicated rows of symplectic matrix terms, whilst summing 
-        the corresponding coefficients of the deleted rows in coeff
-        """ 
-        # order lexicographically and take difference between adjacent rows
-        term_ordering = np.lexsort(self.symp_matrix.T)
-        diff_adjacent = np.diff(self.symp_matrix[term_ordering], axis=0)
-        # the unique terms are those which are non-zero
-        mask_unique_terms = np.append(True, ~np.all(diff_adjacent==0, axis=1))
-        # determine the inverse mapping that combines duplicate terms
-        inverse_index = np.zeros_like(term_ordering)
-        inverse_index[term_ordering] = np.cumsum(mask_unique_terms) - 1
-        # drop duplicate terms
-        simplified_terms = self.symp_matrix[term_ordering][mask_unique_terms]
-        # sum over the coefficients of duplicated terms
-        # note np.bincount doesn't like complex numbers
-        weights = self.coeff_vec
-        cf_real = np.bincount(inverse_index, weights = weights.real)
-        cf_imag = np.bincount(inverse_index, weights = weights.imag)
-        simplified_coeff = cf_real+cf_imag*1j
-        # index non-zero elements in the coefficient vector
-        mask_non_zero = np.where(simplified_coeff!=0)
-        return PauliwordOp(simplified_terms[mask_non_zero], simplified_coeff[mask_non_zero])
 
     def __add__(self, 
             Pword: "PauliwordOp"
@@ -364,13 +347,30 @@ class PauliwordOp:
 
     def _rotate_by_single_Pword(self, 
             Pword: "PauliwordOp", 
-            angle:float=None
+            angle: float = None
         ) -> "PauliwordOp":
-        """ TODO should ignore any coefficients specified in Pword!
-        Else this type of rotation is not well-defined 
+        """ 
+        Let R(t) = e^{i t/2 Q} = cos(t/2)*I + i*sin(t/2)*Q, then one of the following can occur:
+        R(t) P R^\dag(t) = P when [P,Q] = 0
+        R(t) P R^\dag(t) = cos(t) P + sin(t) (-iPQ) when {P,Q} = 0
+
+        This operation is Clifford when t=pi/2, since cos(pi/2) P - sin(pi/2) iPQ = -iPQ.
+        For t!=pi/2 an increase in the number of terms can be observed (non-Clifford unitary).
+        
+        <!> Please note the definition of the angle in R(t)...
+            different implementations could be out by a factor of 2!
         """
         assert(Pword.n_terms==1), 'Only rotation by single Pauliword allowed here'
-        commute_vec = self.commutes_termwise(Pword).flatten()
+        if Pword.coeff_vec[0] != 1:
+            # non-1 coefficients will affect the sign and angle in the exponent of R(t)
+            # imaginary coefficients result in non-unitary R(t)
+            Pword_copy = Pword.copy()
+            Pword_copy.coeff_vec[0] = 1
+            warnings.warn(f'Pword coefficient {Pword.coeff_vec[0]: .8f} has been set to 1')
+        else:
+            Pword_copy = Pword
+
+        commute_vec = self.commutes_termwise(Pword_copy).flatten()
         commute_symp = self.symp_matrix[commute_vec]
         commute_coeff = self.coeff_vec[commute_vec]
         # ~commute_vec == not commutes, this indexes the anticommuting terms
@@ -382,31 +382,33 @@ class PauliwordOp:
 
         if angle is None:
             # assumes pi/2 rotation so Clifford
-            anticom_part = (anticom_self*Pword).multiply_by_constant(-1j)
+            anticom_part = (anticom_self*Pword_copy).multiply_by_constant(-1j)
         else:
             # if angle is specified, performs non-Clifford rotation
             anticom_part = (anticom_self.multiply_by_constant(np.cos(angle)) + 
-                            (anticom_self*Pword).multiply_by_constant(-1j*np.sin(angle)))
+                            (anticom_self*Pword_copy).multiply_by_constant(-1j*np.sin(angle)))
         
         return commute_self + anticom_part
 
-    def rotate_by_Pword(self, 
-            Pword: "PauliwordOp", 
+    def recursive_rotate_by_Pword(self, 
+            pauli_rot_list: Union[List[str], List[np.array]], 
             angles: List[float] = None
         ) -> "PauliwordOp":
-        """ Let R(t) = e^{i t/2 Q} = cos(t/2)*I + i*sin(t/2)*Q, then one of the following can occur:
-        R(t) P R^\dag(t) = P when [P,Q] = 0
-        R(t) P R^\dag(t) = cos(t) P + sin(t) (-iPQ) when {P,Q} = 0
-       
-        This operation is Clifford when t=pi/2, since cos(pi/2) P - sin(pi/2) iPQ = -iPQ.
-        For t!=pi/2 an increase in the number of terms can be observed (non-Clifford unitary).
+        """ 
+        Performs single Pauli rotations recursively left-to-right given a list of paulis supplied 
+        either as strings or in the symplectic representation. This method does not allow coefficients 
+        to be specified as rotation in this setting is ill-defined.
+
+        If no angles are given then rotations are assumed to be pi/2 (Clifford)
         """
-        #assert(np.all(Pword.adjacency_matrix)), 'Not all terms commute within Pword - cannot perform rotation'
+        if isinstance(pauli_rot_list[0], str):
+            pauli_rot_list = [string_to_symplectic(r, self.n_qubits) for r in pauli_rot_list]
         if angles is None:
-            angles = [None for t in range(Pword.n_terms)]
+            angles = [None for t in range(len(pauli_rot_list))]
+        assert(len(angles) == len(pauli_rot_list)), 'Mismatch between number of angles and number of Pauli terms'
         P_rotating = self.copy()
-        for Pvec_single,coeff_single,angle in zip(Pword.symp_matrix,Pword.coeff_vec,angles):
-            Pword_temp = PauliwordOp(Pvec_single, [coeff_single])
+        for pauli_single,angle in zip(pauli_rot_list, angles):#.symp_matrix,Pword.coeff_vec,angles):
+            Pword_temp = PauliwordOp(pauli_single, [1]) # enforcing coefficient to be 1, see above
             P_rotating = P_rotating._rotate_by_single_Pword(Pword_temp, angle).cleanup()
         return P_rotating
 
