@@ -229,7 +229,30 @@ class PauliwordOp:
 
         return PauliwordOp(phaseless_prod_Pword.symp_matrix, new_coeff_vec)
 
+
     def cleanup(self) -> "PauliwordOp":
+        """ Remove duplicated rows of symplectic matrix terms, whilst summing
+        the corresponding coefficients of the deleted rows in coeff
+        """
+        # convert sym form to list of ints
+        int_list = self.symp_matrix @ (1 << np.arange(self.symp_matrix.shape[1])[::-1])
+        re_order_indices = np.argsort(int_list)
+        sorted_int_list = int_list[re_order_indices]
+
+        sorted_symp_matrix = self.symp_matrix[re_order_indices]
+        sorted_coeff_vec = self.coeff_vec[re_order_indices]
+
+        # determine the first indices of each element in the sorted list (and ignore duplicates)
+        elements, indices = np.unique(sorted_int_list, return_counts=True)
+        row_summing = np.append([0], np.cumsum(indices))[:-1]  # [0, index1, index2,...]
+
+        # reduced_symplectic_matrix = np.add.reduceat(sorted_symp_matrix, row_summing, axis=0)
+        reduced_symplectic_matrix = sorted_symp_matrix[row_summing]
+        reduced_coeff_vec = np.add.reduceat(sorted_coeff_vec, row_summing, axis=0)
+        return PauliwordOp(reduced_symplectic_matrix, reduced_coeff_vec)
+
+
+    def cleanup_old(self) -> "PauliwordOp":
         """ Remove duplicated rows of symplectic matrix terms, whilst summing 
         the corresponding coefficients of the deleted rows in coeff
         """ 
@@ -438,4 +461,3 @@ class PauliwordOp:
             return True
         else:
             return False
-
