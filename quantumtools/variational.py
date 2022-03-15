@@ -219,8 +219,8 @@ class VariationalAlgorithm(Ansatz):
         else:
             return self.noisy_expectation(x, n_shots)
 
-    def gradient(self, x, n_shots=2**10, exact=False):
-        """ return the gradient at x w.r.t. to the observable operator
+    def first_order_derivative(self, x, n_shots=2**10, exact=False):
+        """ return the first-order derivative at x w.r.t. to the observable operator
         """
         gradient_vec = []
         for i in range(self.to_QuantumCircuit.num_parameters):
@@ -229,11 +229,24 @@ class VariationalAlgorithm(Ansatz):
             gradient_vec.append(self.observable_estimation(x+diff_vec, n_shots, exact) 
                                 - self.observable_estimation(x-diff_vec, n_shots, exact))
         return np.array(gradient_vec)
+
+    def second_order_derivative(self, x, n_shots=2**10, exact=False):
+        """ return the second-order derivative at x w.r.t. to the observable operator
+        """
+        gradient_vec = []
+        for i in range(self.to_QuantumCircuit.num_parameters):
+            diff_vec = np.zeros(self.to_QuantumCircuit.num_parameters)
+            diff_vec[i] = np.pi/2
+            gradient_vec.append(self.observable_estimation(x+diff_vec, n_shots, exact) 
+                                + self.observable_estimation(x-diff_vec, n_shots, exact)
+                                - 2*self.observable_estimation(x, n_shots, exact))
+        return np.array(gradient_vec)
             
     def VQE(self, 
         init_params=None, 
         optimizer='SLSQP', 
         maxiter=10, 
+        opt_tol = None,
         gradient_descent=True, 
         n_shots=2**10, 
         n_realize=1, 
@@ -250,8 +263,8 @@ class VariationalAlgorithm(Ansatz):
             interim_values['values'].append(energy)
             return energy
 
-        def derivative(x):
-            grad = self.gradient(x, n_shots, exact)
+        def jac(x):
+            grad = self.first_order_derivative(x, n_shots, exact)
             interim_values['gradients'].append(grad)
             return grad
 
@@ -259,10 +272,11 @@ class VariationalAlgorithm(Ansatz):
             init_params = np.zeros(self.to_QuantumCircuit.num_parameters)
 
         vqe_result = minimize(
-            objective, 
-            x0=init_params, 
-            jac=derivative,
+            fun=objective, 
+            jac=jac,
+            x0=init_params,
             method=optimizer,
+            tol=opt_tol,
             options={'maxiter':maxiter}
         )
 
