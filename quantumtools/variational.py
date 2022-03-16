@@ -254,18 +254,19 @@ class VariationalAlgorithm(Ansatz):
         ):
         """
         """
-        interim_values = {'values':[], 'params':[], 'gradients':[]}
+        interim_values = {'values':[], 'params':[], 'gradients':[], 'count':0}
 
         def objective(x):
+            interim_values['count']+=1
             samples = np.array([self.observable_estimation(x, n_shots, exact) for itr in range(n_realize)])
             energy = np.mean(samples)
-            interim_values['params'].append(x)
-            interim_values['values'].append(energy)
+            interim_values['params'].append((interim_values['count'], x))
+            interim_values['values'].append((interim_values['count'], energy))
             return energy
 
         def jac(x):
             grad = self.first_order_derivative(x, n_shots, exact)
-            interim_values['gradients'].append(grad)
+            interim_values['gradients'].append((interim_values['count'], grad))
             return grad
 
         if init_params is None:
