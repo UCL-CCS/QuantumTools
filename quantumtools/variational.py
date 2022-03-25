@@ -1,4 +1,5 @@
 from functools import cached_property
+from cirq import Pauli
 from symred.symplectic_form import PauliwordOp
 from functools import cached_property
 import pyzx as zx
@@ -11,6 +12,7 @@ from operator import add
 from functools import reduce
 from copy import deepcopy
 from scipy.optimize import minimize
+from typing import Tuple
 
 class Ansatz:
     """ Class for building and evaluating expectation values of paramtrized Ansatze
@@ -282,6 +284,86 @@ class VariationalAlgorithm(Ansatz):
         )
 
         return vqe_result, interim_values
+
+def qubit_ADAPT_VQE(
+        observable_operator: PauliwordOp, 
+        ansatz_operator: PauliwordOp, 
+        ref_state: np.array,
+        threshold: float  = 0.0016,
+        ref_energy: float = None,
+        param_shift: bool = False,
+        maxiter: int = 10
+    ) -> Tuple[PauliwordOp, list]:
+    """ Implementation of qubit-ADAPT-VQE from https://doi.org/10.1103/PRXQuantum.2.020310
+    
+    Identifies a subset of terms from the input ansatz_operator that achieves the termination
+    criterion (e.g. reaches chemical accuracy or gradient vector sufficiently close to zero) 
+
+    Returns:
+    The simplified ansatz operator and optimal parameter configuration
+
+    """
+    build_ansatz = []
+    opt_params = []
+    ansatz_pool = [ansatz_operator[i] for i in range(ansatz_operator.n_terms)]
+    termination_criterion = 1
+
+    while termination_criterion > threshold:
+        ansatz_pool_trials = []
+        trial_params = opt_params + [0]
+        
+        for index, anz_op in enumerate(ansatz_pool):
+
+            # append ansatz term on the right with corresponding parameter zeroed
+            pauli_string = list(anz_op.to_dictionary.keys())[0]
+            trial_ansatz = build_ansatz + [pauli_string]
+            trial_ansatz = PauliwordOp(trial_ansatz, trial_params)
+
+            # estimate gradient w.r.t. new paramter at zero by...
+            if not param_shift:
+                # measuring commutator :
+                anz_op.coeff_vec = np.ones(1)
+                observable = (observable_operator * anz_op - anz_op * observable_operator).cleanup_zeros()
+                vqe = VariationalAlgorithm(observable, trial_ansatz, ref_state)
+                grad = vqe.observable_estimation(x=trial_params, exact=True)        
+            else:
+                # or paramter shift rule:    
+                vqe = VariationalAlgorithm(observable_operator, trial_ansatz, ref_state)
+                grad = vqe.first_order_derivative(x=trial_params, exact=True)[-1]
+             
+            ansatz_pool_trials.append([index, pauli_string, grad])
+
+        # choose ansatz term with the largest gradient at zero
+        best_index, best_term, best_grad = sorted(ansatz_pool_trials, key=lambda x:-abs(x[2]))[0]
+        ansatz_pool.pop(best_index)
+        build_ansatz.append(best_term)
+
+        # re-optimize the full ansatz
+        ansatz_operator = PauliwordOp(build_ansatz, trial_params)
+        vqe = VariationalAlgorithm(
+            observable_operator, 
+            ansatz_operator, 
+            ref_state,
+        )
+        opt_out, interim = vqe.VQE(optimizer='SLSQP', exact=True, maxiter=maxiter)
+        opt_params = list(opt_out['x'])
+
+        # update the gradient norm that inform the termination criterion
+        if ref_energy is not None:
+            # if reference energy given (such as FCI energy) then absolute error is selected
+            termination_criterion = abs(opt_out['fun']-ref_energy)
+        else:
+            # otherwise l2-norm of the gradient vector
+            termination_criterion = np.sqrt(
+                np.sum(
+                    np.square(
+                        vqe.first_order_derivative(x=opt_params, exact=True)
+                    )
+                )
+            )
+        print(f'{ansatz_operator.n_terms}-term ansatz termination criterion: {termination_criterion: .8f} < {threshold: .8f}? {termination_criterion<threshold}')
+
+    return ansatz_operator, opt_params
 
 
 
