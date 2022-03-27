@@ -308,6 +308,15 @@ def qubit_ADAPT_VQE(
     ansatz_pool = [ansatz_operator[i] for i in range(ansatz_operator.n_terms)]
     termination_criterion = 1
 
+    if ref_energy is not None:
+        message = 'Using error w.r.t. reference energy as termination criterion'
+    else:
+        message = 'Using best gradient as termination criterion'
+
+    print('-'*len(message))
+    print(message)
+    print('-'*len(message))
+
     while termination_criterion > threshold:
         ansatz_pool_trials = []
         trial_params = opt_params + [0]
@@ -351,17 +360,12 @@ def qubit_ADAPT_VQE(
         # update the gradient norm that inform the termination criterion
         if ref_energy is not None:
             # if reference energy given (such as FCI energy) then absolute error is selected
-            termination_criterion = abs(opt_out['fun']-ref_energy)
+            termination_criterion = abs(opt_out['fun']-ref_energy)         
         else:
-            # otherwise l2-norm of the gradient vector
-            termination_criterion = np.sqrt(
-                np.sum(
-                    np.square(
-                        vqe.first_order_derivative(x=opt_params, exact=True)
-                    )
-                )
-            )
-        print(f'{ansatz_operator.n_terms}-term ansatz termination criterion: {termination_criterion: .8f} < {threshold: .8f}? {termination_criterion<threshold}')
+            # otherwise use best gradient value
+            termination_criterion = abs(best_grad)
+        
+        print(f'{ansatz_operator.n_terms}-term ansatz termination criterion: {termination_criterion: .4f} < {threshold: .4f}? {termination_criterion<threshold}')
 
     return ansatz_operator, opt_params
 
